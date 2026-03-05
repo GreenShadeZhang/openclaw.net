@@ -26,6 +26,7 @@ internal static class Program
             {
                 "run" => await RunAsync(rest),
                 "chat" => await ChatAsync(rest),
+                "clawhub" => await ClawHubCommand.RunAsync(rest),
                 "version" or "--version" or "-v" => PrintVersion(),
                 _ => UnknownCommand(command)
             };
@@ -64,6 +65,7 @@ internal static class Program
             Usage:
               openclaw run [options] <prompt>
               openclaw chat [options]
+              openclaw clawhub [wrapper options] [--] <clawhub args...>
 
             Common options:
               --url <url>        Base URL (default: OPENCLAW_BASE_URL or http://127.0.0.1:18789)
@@ -86,6 +88,14 @@ internal static class Program
               openclaw run "summarize this README" --file ./README.md
               cat error.log | openclaw run "what went wrong?"
               openclaw chat --system "Be concise."
+
+            ClawHub wrapper:
+              # Forward --help to ClawHub itself:
+              openclaw clawhub -- --help
+              # Install skills into $OPENCLAW_WORKSPACE/skills (default):
+              openclaw clawhub install <skill-slug>
+              # Install into ~/.openclaw/skills:
+              openclaw clawhub --managed install <skill-slug>
             """);
     }
 
@@ -335,4 +345,3 @@ internal static class Program
         return value;
     }
 }
-

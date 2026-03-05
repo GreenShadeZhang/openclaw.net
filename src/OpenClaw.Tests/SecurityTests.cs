@@ -245,4 +245,24 @@ public class SecurityTests
         var result = await tool.ExecuteAsync("{\"action\":\"list\",\"folder\":\"INBOX\\u0000EVIL\"}", CancellationToken.None);
         Assert.Contains("control character", result);
     }
+
+    [Fact]
+    public async Task InboxZero_AnalyzeAction_RejectsControlCharsInFolder()
+    {
+        var emailConfig = new OpenClaw.Core.Plugins.EmailConfig
+        {
+            Enabled = true,
+            ImapHost = "imap.example.com",
+            Username = "test",
+            PasswordRef = "raw:test"
+        };
+        var inboxZeroConfig = new OpenClaw.Core.Plugins.InboxZeroConfig
+        {
+            Enabled = true
+        };
+        var tool = new OpenClaw.Agent.Tools.InboxZeroTool(inboxZeroConfig, emailConfig);
+
+        var result = await tool.ExecuteAsync("{\"action\":\"analyze\",\"folder\":\"INBOX\\u0000EVIL\"}", CancellationToken.None);
+        Assert.Contains("control character", result);
+    }
 }

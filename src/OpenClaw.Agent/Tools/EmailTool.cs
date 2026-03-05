@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
 
@@ -15,8 +16,13 @@ namespace OpenClaw.Agent.Tools;
 public sealed class EmailTool : ITool, IDisposable
 {
     private readonly EmailConfig _config;
+    private readonly ToolingConfig? _toolingConfig;
 
-    public EmailTool(EmailConfig config) => _config = config;
+    public EmailTool(EmailConfig config, ToolingConfig? toolingConfig = null)
+    {
+        _config = config;
+        _toolingConfig = toolingConfig;
+    }
 
     public string Name => "email";
     public string Description =>
@@ -69,6 +75,9 @@ public sealed class EmailTool : ITool, IDisposable
     {
         using var args = JsonDocument.Parse(argumentsJson);
         var action = args.RootElement.GetProperty("action").GetString()!.ToLowerInvariant();
+
+        if (_toolingConfig?.ReadOnlyMode == true && action == "send")
+            return "Error: email send action is disabled because Tooling.ReadOnlyMode is enabled.";
 
         return action switch
         {

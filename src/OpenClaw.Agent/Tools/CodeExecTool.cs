@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 
 namespace OpenClaw.Agent.Tools;
@@ -15,8 +16,13 @@ namespace OpenClaw.Agent.Tools;
 public sealed class CodeExecTool : ITool
 {
     private readonly CodeExecConfig _config;
+    private readonly ToolingConfig? _toolingConfig;
 
-    public CodeExecTool(CodeExecConfig config) => _config = config;
+    public CodeExecTool(CodeExecConfig config, ToolingConfig? toolingConfig = null)
+    {
+        _config = config;
+        _toolingConfig = toolingConfig;
+    }
 
     public string Name => "code_exec";
     public string Description =>
@@ -48,6 +54,9 @@ public sealed class CodeExecTool : ITool
 
     public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
     {
+        if (_toolingConfig?.ReadOnlyMode == true)
+            return "Error: code_exec is disabled because Tooling.ReadOnlyMode is enabled.";
+
         using var args = JsonDocument.Parse(argumentsJson);
         if (!args.RootElement.TryGetProperty("language", out var languageEl) || languageEl.ValueKind != JsonValueKind.String)
             return "Error: 'language' is required.";

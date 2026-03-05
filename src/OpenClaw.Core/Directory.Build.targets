@@ -1,0 +1,36 @@
+<Project>
+  <!--
+    Work around intermittent MSB3492 failures when MSBuild tries to read the existing
+    CoreCompileInputs.cache file (WriteOnlyWhenDifferent=true) on some filesystems.
+    Always overwriting avoids the read-before-write step.
+  -->
+  <Target Name="_GenerateCompileDependencyCache"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(BuildingProject)' == 'true'"
+          DependsOnTargets="ResolveAssemblyReferences;_GenerateCompileInputs">
+    <ItemGroup>
+      <CustomAdditionalCompileInputs Include="$(IntermediateOutputPath)$(MSBuildProjectFile).CoreCompileInputs.cache" />
+      <CoreCompileCache Include="@(Compile)" />
+      <CoreCompileCache Include="@(ReferencePath)" />
+      <CoreCompileCache Include="$(DefineConstants)" />
+      <CoreCompileCache Include="$(LangVersion)" />
+      <CoreCompileCache Include="$(Deterministic)" />
+      <CoreCompileCache Include="$(PathMap)" />
+      <CoreCompileCache Include="@(_CoreCompileResourceInputs)" />
+    </ItemGroup>
+
+    <Hash ItemsToHash="@(CoreCompileCache)"
+          IgnoreCase="$([MSBuild]::ValueOrDefault(`$(CoreCompileCacheIgnoreCase)`, `true`))">
+      <Output TaskParameter="HashResult" PropertyName="CoreCompileDependencyHash" />
+    </Hash>
+
+    <WriteLinesToFile Lines="$(CoreCompileDependencyHash)"
+                      File="$(IntermediateOutputPath)$(MSBuildProjectFile).CoreCompileInputs.cache"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="false" />
+
+    <ItemGroup>
+      <FileWrites Include="$(IntermediateOutputPath)$(MSBuildProjectFile).CoreCompileInputs.cache" />
+    </ItemGroup>
+  </Target>
+</Project>
+

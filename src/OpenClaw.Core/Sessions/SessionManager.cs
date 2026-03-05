@@ -77,7 +77,7 @@ public sealed class SessionManager
 
         // Evict expired sessions if at capacity
         if (Volatile.Read(ref _activeCount) >= _maxSessions)
-            EvictExpired();
+            SweepExpiredActiveSessions();
 
         if (Volatile.Read(ref _activeCount) >= _maxSessions)
             EvictLeastRecentlyActive();
@@ -205,6 +205,24 @@ public sealed class SessionManager
         return await _store.GetSessionAsync(sessionId, ct);
     }
 
+    /// <summary>
+    /// Removes an active in-memory session by id.
+    /// Useful for explicitly ephemeral request-scoped sessions.
+    /// </summary>
+    public bool RemoveActive(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return false;
+
+        if (_active.TryRemove(sessionId, out _))
+        {
+            Interlocked.Decrement(ref _activeCount);
+            return true;
+        }
+
+        return false;
+    }
+
 
     /// <summary>
     /// Returns true if the given session key is currently in the active sessions dictionary.
@@ -216,9 +234,14 @@ public sealed class SessionManager
     /// </summary>
     public int ActiveCount => Volatile.Read(ref _activeCount);
 
-    private void EvictExpired()
+    /// <summary>
+    /// Proactively evict expired sessions from the active in-memory dictionary.
+    /// Returns the number of evicted sessions.
+    /// </summary>
+    public int SweepExpiredActiveSessions()
     {
         var cutoff = DateTimeOffset.UtcNow - _timeout;
+        var removedCount = 0;
         foreach (var kvp in _active)
         {
             if (kvp.Value.LastActiveAt < cutoff)
@@ -227,11 +250,14 @@ public sealed class SessionManager
                 if (_active.TryRemove(kvp.Key, out var removed))
                 {
                     Interlocked.Decrement(ref _activeCount);
+                    removedCount++;
                     _logger?.LogInformation("Session {SessionId} expired and evicted", kvp.Key);
                     _ = PersistBestEffortAsync(removed);
                 }
             }
         }
+
+        return removedCount;
     }
 
     private void EvictLeastRecentlyActive()

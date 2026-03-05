@@ -22,14 +22,15 @@ public sealed class FileReadTool : ITool
         var path = args.RootElement.GetProperty("path").GetString()!;
         var maxLines = args.RootElement.TryGetProperty("max_lines", out var ml) ? ml.GetInt32() : 200;
         maxLines = Math.Clamp(maxLines, 1, 5_000);
+        var resolvedPath = ToolPathPolicy.ResolveRealPath(path);
 
-        if (!ToolPathPolicy.IsReadAllowed(_config, path))
+        if (!ToolPathPolicy.IsReadAllowed(_config, resolvedPath))
             return $"Error: Read access denied for path: {path}";
 
-        if (!File.Exists(path))
+        if (!File.Exists(resolvedPath))
             return $"Error: File not found: {path}";
 
-        await using var stream = new FileStream(path, new FileStreamOptions
+        await using var stream = new FileStream(resolvedPath, new FileStreamOptions
         {
             Mode = FileMode.Open,
             Access = FileAccess.Read,

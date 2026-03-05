@@ -68,6 +68,10 @@ public sealed class WhatsAppBridgeChannel : IChannelAdapter
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send WhatsApp Bridge message to {RecipientId}", outbound.RecipientId);
+            if (_config.BridgeSuppressSendExceptions)
+                return;
+
+            throw;
         }
     }
 

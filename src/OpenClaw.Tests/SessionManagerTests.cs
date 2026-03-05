@@ -60,6 +60,25 @@ public sealed class SessionManagerTests
         Assert.Equal("cron:daily-news", s1.Id);
     }
 
+    [Fact]
+    public async Task SweepExpiredActiveSessions_EvictsExpiredWithoutCapacityPressure()
+    {
+        var store = new InMemoryStore();
+        var manager = new SessionManager(store, new GatewayConfig
+        {
+            MaxConcurrentSessions = 100,
+            SessionTimeoutMinutes = 1
+        });
+
+        var session = await manager.GetOrCreateAsync("websocket", "charlie", CancellationToken.None);
+        session.LastActiveAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+
+        var evicted = manager.SweepExpiredActiveSessions();
+
+        Assert.Equal(1, evicted);
+        Assert.False(manager.IsActive("websocket:charlie"));
+    }
+
     private sealed class BarrierMemoryStore : IMemoryStore
     {
         private readonly Barrier _barrier;

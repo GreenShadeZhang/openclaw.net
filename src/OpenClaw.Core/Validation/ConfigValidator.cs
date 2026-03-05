@@ -1,3 +1,5 @@
+using OpenClaw.Core.Security;
+
 namespace OpenClaw.Core.Validation;
 
 /// <summary>
@@ -43,7 +45,20 @@ public static class ConfigValidator
                 errors.Add($"Memory.CompactionKeepRecent must be >= 2 (got {config.Memory.CompactionKeepRecent}).");
             if (config.Memory.CompactionKeepRecent >= config.Memory.CompactionThreshold)
                 errors.Add("Memory.CompactionKeepRecent must be less than CompactionThreshold.");
+            if (config.Memory.CompactionThreshold <= config.Memory.MaxHistoryTurns)
+                errors.Add("Memory.CompactionThreshold must be greater than MaxHistoryTurns when EnableCompaction=true.");
         }
+
+        if (config.Memory.Retention.SweepIntervalMinutes < 5)
+            errors.Add($"Memory.Retention.SweepIntervalMinutes must be >= 5 (got {config.Memory.Retention.SweepIntervalMinutes}).");
+        if (config.Memory.Retention.SessionTtlDays < 1)
+            errors.Add($"Memory.Retention.SessionTtlDays must be >= 1 (got {config.Memory.Retention.SessionTtlDays}).");
+        if (config.Memory.Retention.BranchTtlDays < 1)
+            errors.Add($"Memory.Retention.BranchTtlDays must be >= 1 (got {config.Memory.Retention.BranchTtlDays}).");
+        if (config.Memory.Retention.ArchiveRetentionDays < 1)
+            errors.Add($"Memory.Retention.ArchiveRetentionDays must be >= 1 (got {config.Memory.Retention.ArchiveRetentionDays}).");
+        if (config.Memory.Retention.MaxItemsPerSweep < 10)
+            errors.Add($"Memory.Retention.MaxItemsPerSweep must be >= 10 (got {config.Memory.Retention.MaxItemsPerSweep}).");
 
         // Sessions
         if (config.MaxConcurrentSessions < 1)
@@ -100,6 +115,13 @@ public static class ConfigValidator
             errors.Add($"Channels.WhatsApp.MaxInboundChars must be >= 1 (got {config.Channels.WhatsApp.MaxInboundChars}).");
         if (config.Channels.WhatsApp.MaxRequestBytes < 1024)
             errors.Add($"Channels.WhatsApp.MaxRequestBytes must be >= 1024 (got {config.Channels.WhatsApp.MaxRequestBytes}).");
+        if (config.Channels.WhatsApp.ValidateSignature)
+        {
+            var appSecret = SecretResolver.Resolve(config.Channels.WhatsApp.WebhookAppSecretRef)
+                ?? config.Channels.WhatsApp.WebhookAppSecret;
+            if (string.IsNullOrWhiteSpace(appSecret))
+                errors.Add("Channels.WhatsApp.ValidateSignature is true but WebhookAppSecret/WebhookAppSecretRef is not configured.");
+        }
 
         // Cron
         if (config.Cron.Enabled)
@@ -124,6 +146,16 @@ public static class ConfigValidator
                     errors.Add($"Webhook endpoint '{name}' MaxBodyLength must be >= 1 (got {endpoint.MaxBodyLength}).");
                 if (endpoint.MaxRequestBytes < 1024)
                     errors.Add($"Webhook endpoint '{name}' MaxRequestBytes must be >= 1024 (got {endpoint.MaxRequestBytes}).");
+                if (endpoint.ValidateHmac)
+                {
+                    var secret = SecretResolver.Resolve(endpoint.Secret);
+                    if (string.IsNullOrWhiteSpace(secret))
+                    {
+                        errors.Add(
+                            $"Webhook endpoint '{name}' has ValidateHmac=true but no Secret is configured. " +
+                            "Set OpenClaw:Webhooks:Endpoints:<name>:Secret.");
+                    }
+                }
             }
         }
 

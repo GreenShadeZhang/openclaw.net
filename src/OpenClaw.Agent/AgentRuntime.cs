@@ -552,13 +552,6 @@ public sealed class AgentRuntime
         var result = new StreamCollectResult();
         var llmSw = Stopwatch.StartNew();
 
-        // Create the timeout CTS here so it is properly disposed after enumeration completes.
-        using var timeoutCts = _llmTimeoutSeconds > 0
-            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-            : null;
-        timeoutCts?.CancelAfter(TimeSpan.FromSeconds(_llmTimeoutSeconds));
-        var effectiveCt = timeoutCts?.Token ?? ct;
-
         // Start fallback logic
         var currentModel = options.ModelId ?? _config.Model;
         var modelsToTry = new List<string> { currentModel };
@@ -575,6 +568,12 @@ public sealed class AgentRuntime
 
         foreach (var model in modelsToTry)
         {
+            using var timeoutCts = _llmTimeoutSeconds > 0
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            timeoutCts?.CancelAfter(TimeSpan.FromSeconds(_llmTimeoutSeconds));
+            var effectiveCt = timeoutCts?.Token ?? ct;
+
             if (model != currentModel)
             {
                 options.ModelId = model;

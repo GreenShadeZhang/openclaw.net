@@ -3,6 +3,7 @@ using System.Text.Json;
 using MQTTnet;
 using MQTTnet.Protocol;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
 
@@ -11,8 +12,13 @@ namespace OpenClaw.Agent.Tools;
 public sealed class MqttPublishTool : ITool
 {
     private readonly MqttConfig _config;
+    private readonly ToolingConfig? _toolingConfig;
 
-    public MqttPublishTool(MqttConfig config) => _config = config;
+    public MqttPublishTool(MqttConfig config, ToolingConfig? toolingConfig = null)
+    {
+        _config = config;
+        _toolingConfig = toolingConfig;
+    }
 
     public string Name => "mqtt_publish";
 
@@ -34,6 +40,9 @@ public sealed class MqttPublishTool : ITool
 
     public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
     {
+        if (_toolingConfig?.ReadOnlyMode == true)
+            return "Error: mqtt_publish is disabled because Tooling.ReadOnlyMode is enabled.";
+
         using var args = JsonDocument.Parse(argumentsJson);
         var root = args.RootElement;
 

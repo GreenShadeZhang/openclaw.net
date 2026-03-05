@@ -37,8 +37,11 @@ graph TD
 ## Docs
 
 - [Tool Guide](TOOLS_GUIDE.md) — Detailed setup for all 18+ native tools.
+- [Hardening Profiles](TOOLS_GUIDE.md#copypaste-hardening-profiles) — Copy/paste dev/staging/prod security setups.
 - [User Guide](USER_GUIDE.md) — Core concepts and architecture.
 - [Security Guide](SECURITY.md) — Mandatory reading for public deployments.
+- [Changelog](CHANGELOG.md) — Tracked project changes.
+- [Docker Hub Overview](DOCKERHUB.md) — Paste-ready README for `tellikoroma/openclaw.net`.
 
 ## Quickstart (local)
 
@@ -103,7 +106,7 @@ Optional legacy auth (disabled by default):
 Built-in WebChat auth behavior:
 - The `/chat` UI connects to `/ws` using `?token=<token>` from the Auth Token field.
 - For Internet-facing/non-loopback binds, set `OpenClaw:Security:AllowQueryStringToken=true` if you use the built-in WebChat.
-- The token value is saved in browser `localStorage` as `openclaw_token` when entered.
+- Tokens are stored in `sessionStorage` by default. Enabling **Remember** also stores `openclaw_token` in `localStorage`.
 
 ### TLS
 You can run TLS either:
@@ -117,6 +120,8 @@ When binding to a non-loopback address, the gateway **refuses to start** unless 
 - Wildcard tooling roots (`AllowedReadRoots=["*"]`, `AllowedWriteRoots=["*"]`)
 - `OpenClaw:Tooling:AllowShell=true`
 - `OpenClaw:Plugins:Enabled=true` (JS plugin bridge)
+- WhatsApp official webhooks without signature validation (`ValidateSignature=true` + `WebhookAppSecretRef` required)
+- WhatsApp bridge webhooks without a bridge token (`BridgeTokenRef` / `BridgeToken` required)
 - `raw:` secret refs (to reduce accidental secret commits)
 
 To override (not recommended), set:
@@ -238,6 +243,7 @@ Inbound webhook payloads are hard-capped before parsing. Configure these limits 
 - `OpenClaw:Webhooks:Endpoints:<name>:MaxRequestBytes` (default `131072`)
 
 For generic `/webhooks/{name}` endpoints, `MaxBodyLength` still controls prompt truncation after request-size validation.
+If `ValidateHmac=true`, `Secret` is required; startup validation fails otherwise.
 
 ## Docker deployment
 
@@ -257,7 +263,7 @@ $env:OPENCLAW_AUTH_TOKEN = [Convert]::ToHexString((1..32 | Array { Get-Random -M
 $env:EMAIL_PASSWORD = "..." # (Optional) For email tool
 ```
 
-> **Note**: For the built-in WebChat UI (`http://<ip>:18789/chat`), enter this exact `OPENCLAW_AUTH_TOKEN` value in the "Auth Token" field. WebChat connects with a query token (`?token=`), so on non-loopback binds you must also set `OpenClaw:Security:AllowQueryStringToken=true`. If you enable the **Email Tool**, set `EMAIL_PASSWORD` similarly.
+> **Note**: For the built-in WebChat UI (`http://<ip>:18789/chat`), enter this exact `OPENCLAW_AUTH_TOKEN` value in the "Auth Token" field. WebChat connects with a query token (`?token=`), so on non-loopback binds you must also set `OpenClaw:Security:AllowQueryStringToken=true`. Tokens are session-scoped by default; check **Remember** to persist across browser restarts. If you enable the **Email Tool**, set `EMAIL_PASSWORD` similarly.
 
 # 2. Run (gateway only)
 docker compose up -d openclaw
@@ -269,12 +275,21 @@ docker compose --profile with-tls up -d
 
 ### Build from source
 ```bash
-docker build -t openclaw-gateway .
+docker build -t openclaw.net .
 docker run -d -p 18789:18789 \
   -e MODEL_PROVIDER_KEY="sk-..." \
   -e OPENCLAW_AUTH_TOKEN="change-me" \
   -v openclaw-memory:/app/memory \
-  openclaw-gateway
+  openclaw.net
+```
+
+### Push to a registry (Docker Hub or GHCR)
+Multi-arch push (recommended):
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t <dockerhub-user>/openclaw.net:latest \
+  -t <dockerhub-user>/openclaw.net:<version> \
+  --push .
 ```
 
 The Dockerfile uses a multi-stage build:
@@ -309,6 +324,10 @@ export OPENCLAW_DOMAIN="openclaw.example.com"
 docker compose --profile with-tls up -d
 ```
 Caddy auto-provisions Let's Encrypt certificates. Edit `deploy/Caddyfile` to customize.
+
+If you want the gateway to trust `X-Forwarded-*` headers from your proxy, set:
+- `OpenClaw__Security__TrustForwardedHeaders=true`
+- `OpenClaw__Security__KnownProxies__0=<your-proxy-ip>`
 
 ### Option 2: nginx reverse proxy
 ```nginx
@@ -349,6 +368,42 @@ Configure directly in `appsettings.json`:
 }
 ```
 
+### Memory retention (opt-in)
+
+OpenClaw now supports a background retention sweeper for persisted **sessions + branches**.
+- Default is off: `OpenClaw:Memory:Retention:Enabled=false`
+- Expired items are archived as raw JSON before delete
+- Default TTLs: sessions `30` days, branches `14` days
+- Default archive retention: `30` days
+
+Example config:
+```json
+{
+  "OpenClaw": {
+    "Memory": {
+      "Retention": {
+        "Enabled": true,
+        "RunOnStartup": true,
+        "SweepIntervalMinutes": 30,
+        "SessionTtlDays": 30,
+        "BranchTtlDays": 14,
+        "ArchiveEnabled": true,
+        "ArchivePath": "./memory/archive",
+        "ArchiveRetentionDays": 30,
+        "MaxItemsPerSweep": 1000
+      }
+    }
+  }
+}
+```
+
+Recommended rollout:
+1. Run a dry-run first: `POST /memory/retention/sweep?dryRun=true`
+2. Review `GET /memory/retention/status` and `/doctor/text`
+3. Confirm archive path sizing and filesystem permissions
+
+Compaction remains disabled by default. If enabling compaction, `CompactionThreshold` must be greater than `MaxHistoryTurns`.
+
 ### Observability & Distributed Tracing
 
 OpenClaw natively integrates with **OpenTelemetry**, providing deep insights into agent reasoning, tool execution, and session lifecycles.
@@ -356,7 +411,9 @@ OpenClaw natively integrates with **OpenTelemetry**, providing deep insights int
 | Endpoint | Auth | Description |
 |----------|------|-------------|
 | `GET /health` | Token (if non-loopback) | Basic health check (`{ status, uptime }`) |
-| `GET /metrics` | Token (if non-loopback) | Runtime counters (requests, tokens, tool calls, circuit breaker state) |
+| `GET /metrics` | Token (if non-loopback) | Runtime counters (requests, tokens, tool calls, circuit breaker state, retention runs/outcomes) |
+| `GET /memory/retention/status` | Token (if non-loopback) | Retention config + last run state + persisted session/branch counts |
+| `POST /memory/retention/sweep?dryRun=true|false` | Token (if non-loopback) | Trigger an immediate retention sweep (manual admin action) |
 
 ### Structured logging
 All agent operations emit structured logs and `.NET Activity` traces with correlation IDs. You can export these to OTLP collectors like Jaeger, Prometheus, or Grafana:

@@ -22,6 +22,7 @@ public static class GatewayWorkers
         IHostApplicationLifetime lifetime,
         ILogger logger,
         int workerCount,
+        bool isNonLoopbackBind,
         SessionManager sessionManager,
         ConcurrentDictionary<string, SemaphoreSlim> sessionLocks,
         ConcurrentDictionary<string, DateTimeOffset> lockLastUsed,
@@ -36,7 +37,7 @@ public static class GatewayWorkers
         ChatCommandProcessor commandProcessor)
     {
         StartSessionCleanup(lifetime, logger, sessionManager, sessionLocks, lockLastUsed);
-        StartInboundWorkers(lifetime, logger, workerCount, sessionManager, sessionLocks, lockLastUsed, pipeline, middlewarePipeline, wsChannel, agentRuntime, config, toolApprovalService, pairingManager, commandProcessor);
+        StartInboundWorkers(lifetime, logger, workerCount, isNonLoopbackBind, sessionManager, sessionLocks, lockLastUsed, pipeline, middlewarePipeline, wsChannel, agentRuntime, config, toolApprovalService, pairingManager, commandProcessor);
         StartOutboundWorkers(lifetime, logger, workerCount, pipeline, channelAdapters);
     }
 
@@ -54,6 +55,10 @@ public static class GatewayWorkers
             {
                 try 
                 {
+                    var evicted = sessionManager.SweepExpiredActiveSessions();
+                    if (evicted > 0)
+                        logger.LogDebug("Proactive active-session sweep evicted {Count} expired sessions", evicted);
+
                     var now = DateTimeOffset.UtcNow;
                     var orphanThreshold = TimeSpan.FromHours(2);
                     
@@ -111,6 +116,7 @@ public static class GatewayWorkers
         IHostApplicationLifetime lifetime,
         ILogger logger,
         int workerCount,
+        bool isNonLoopbackBind,
         SessionManager sessionManager,
         ConcurrentDictionary<string, SemaphoreSlim> sessionLocks,
         ConcurrentDictionary<string, DateTimeOffset> lockLastUsed,
@@ -141,10 +147,19 @@ public static class GatewayWorkers
                                 !string.IsNullOrWhiteSpace(msg.ApprovalId) &&
                                 msg.Approved is not null)
                             {
-                                var ok = toolApprovalService.TrySetDecision(msg.ApprovalId, msg.Approved.Value);
-                                var ack = ok
-                                    ? $"Tool approval recorded: {msg.ApprovalId} = {(msg.Approved.Value ? "approved" : "denied")}"
-                                    : $"No pending approval found for id: {msg.ApprovalId}";
+                                var decisionResult = toolApprovalService.TrySetDecision(
+                                    msg.ApprovalId,
+                                    msg.Approved.Value,
+                                    msg.ChannelId,
+                                    msg.SenderId,
+                                    requireRequesterMatch: isNonLoopbackBind);
+
+                                var ack = decisionResult switch
+                                {
+                                    ToolApprovalDecisionResult.Recorded => $"Tool approval recorded: {msg.ApprovalId} = {(msg.Approved.Value ? "approved" : "denied")}",
+                                    ToolApprovalDecisionResult.Unauthorized => $"Approval id is not valid for this sender/channel: {msg.ApprovalId}",
+                                    _ => $"No pending approval found for id: {msg.ApprovalId}"
+                                };
 
                                 await pipeline.OutboundWriter.WriteAsync(new OutboundMessage
                                 {
@@ -176,10 +191,19 @@ public static class GatewayWorkers
 
                                     if (approved || denied)
                                     {
-                                        var ok = toolApprovalService.TrySetDecision(approvalId, approved);
-                                        var ack = ok
-                                            ? $"Tool approval recorded: {approvalId} = {(approved ? "approved" : "denied")}"
-                                            : $"No pending approval found for id: {approvalId}";
+                                        var decisionResult = toolApprovalService.TrySetDecision(
+                                            approvalId,
+                                            approved,
+                                            msg.ChannelId,
+                                            msg.SenderId,
+                                            requireRequesterMatch: isNonLoopbackBind);
+
+                                        var ack = decisionResult switch
+                                        {
+                                            ToolApprovalDecisionResult.Recorded => $"Tool approval recorded: {approvalId} = {(approved ? "approved" : "denied")}",
+                                            ToolApprovalDecisionResult.Unauthorized => $"Approval id is not valid for this sender/channel: {approvalId}",
+                                            _ => $"No pending approval found for id: {approvalId}"
+                                        };
 
                                         await pipeline.OutboundWriter.WriteAsync(new OutboundMessage
                                         {

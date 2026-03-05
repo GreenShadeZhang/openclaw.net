@@ -5,7 +5,7 @@ using OpenClaw.Core.Models;
 
 namespace OpenClaw.Core.Memory;
 
-public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IDisposable
+public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore, IDisposable
 {
     private readonly string _dbPath;
     private readonly bool _enableFtsRequested;
@@ -61,6 +61,9 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IDispos
                   json TEXT NOT NULL,
                   updated_at INTEGER NOT NULL
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at);
+                CREATE INDEX IF NOT EXISTS idx_branches_updated_at ON branches(updated_at);
                 """;
             cmd.ExecuteNonQuery();
         }
@@ -406,9 +409,325 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IDispos
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async ValueTask<RetentionSweepResult> SweepAsync(
+        RetentionSweepRequest request,
+        IReadOnlySet<string> protectedSessionIds,
+        CancellationToken ct)
+    {
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+        protectedSessionIds ??= new HashSet<string>(StringComparer.Ordinal);
+
+        var result = new RetentionSweepResult
+        {
+            StartedAtUtc = request.NowUtc,
+            DryRun = request.DryRun
+        };
+
+        var remaining = Math.Max(1, request.MaxItems);
+
+        await using var conn = new SqliteConnection(ConnectionString);
+        await conn.OpenAsync(ct);
+
+        remaining = await SweepSessionsAsync(conn, request, protectedSessionIds, result, remaining, ct);
+        if (remaining > 0)
+            remaining = await SweepBranchesAsync(conn, request, result, remaining, ct);
+
+        if (remaining <= 0)
+            result.MaxItemsLimitReached = true;
+
+        if (request.ArchiveEnabled && !request.DryRun)
+        {
+            var purgeResult = MemoryRetentionArchive.PurgeExpiredArchives(
+                request.ArchivePath,
+                request.NowUtc,
+                request.ArchiveRetentionDays,
+                ct);
+
+            result.ArchivePurgedFiles = purgeResult.DeletedFiles;
+            result.ArchivePurgeErrors = purgeResult.Errors;
+            foreach (var error in purgeResult.ErrorMessages)
+            {
+                if (result.Errors.Count >= 16)
+                    break;
+                result.Errors.Add(error);
+            }
+        }
+
+        result.CompletedAtUtc = DateTimeOffset.UtcNow;
+        return result;
+    }
+
+    public async ValueTask<RetentionStoreStats> GetRetentionStatsAsync(CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(ConnectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+              (SELECT COUNT(*) FROM sessions) AS sessions_count,
+              (SELECT COUNT(*) FROM branches) AS branches_count;
+            """;
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            return new RetentionStoreStats
+            {
+                Backend = "sqlite",
+                PersistedSessions = 0,
+                PersistedBranches = 0
+            };
+        }
+
+        return new RetentionStoreStats
+        {
+            Backend = "sqlite",
+            PersistedSessions = reader.GetInt64(0),
+            PersistedBranches = reader.GetInt64(1)
+        };
+    }
+
+    private async ValueTask<int> SweepSessionsAsync(
+        SqliteConnection conn,
+        RetentionSweepRequest request,
+        IReadOnlySet<string> protectedSessionIds,
+        RetentionSweepResult result,
+        int remaining,
+        CancellationToken ct)
+    {
+        if (remaining <= 0)
+            return 0;
+
+        var cutoff = request.SessionExpiresBeforeUtc.ToUnixTimeSeconds();
+        var scanLimit = Math.Min(Math.Max(remaining * 4, remaining), 20_000);
+        var pendingDeletes = new List<string>(capacity: Math.Min(remaining, 256));
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, json
+            FROM sessions
+            WHERE updated_at < $cutoff
+            ORDER BY updated_at ASC
+            LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$cutoff", cutoff);
+        cmd.Parameters.AddWithValue("$limit", scanLimit);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            if (remaining <= 0)
+            {
+                result.MaxItemsLimitReached = true;
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
+
+            var sessionId = reader.GetString(0);
+            var payloadJson = reader.GetString(1);
+
+            Session? session;
+            try
+            {
+                session = JsonSerializer.Deserialize(payloadJson, CoreJsonContext.Default.Session);
+            }
+            catch
+            {
+                session = null;
+            }
+
+            if (session is null)
+            {
+                result.SkippedCorruptSessionItems++;
+                continue;
+            }
+
+            if (protectedSessionIds.Contains(sessionId))
+            {
+                result.SkippedProtectedSessions++;
+                continue;
+            }
+
+            if (session.LastActiveAt >= request.SessionExpiresBeforeUtc)
+                continue;
+
+            result.EligibleSessions++;
+            remaining--;
+
+            if (request.DryRun)
+                continue;
+
+            if (request.ArchiveEnabled)
+            {
+                try
+                {
+                    await MemoryRetentionArchive.ArchivePayloadAsync(
+                        request.ArchivePath,
+                        request.NowUtc,
+                        kind: "sessions",
+                        sessionId,
+                        request.SessionExpiresBeforeUtc,
+                        sourceBackend: "sqlite",
+                        payloadJson,
+                        ct);
+                    result.ArchivedSessions++;
+                }
+                catch (Exception ex)
+                {
+                    if (result.Errors.Count < 16)
+                        result.Errors.Add($"Failed to archive session '{sessionId}': {ex.Message}");
+                    continue;
+                }
+            }
+
+            pendingDeletes.Add(sessionId);
+        }
+
+        if (pendingDeletes.Count > 0)
+            result.DeletedSessions += await DeleteSessionsByIdAsync(conn, pendingDeletes, ct);
+
+        return remaining;
+    }
+
+    private async ValueTask<int> SweepBranchesAsync(
+        SqliteConnection conn,
+        RetentionSweepRequest request,
+        RetentionSweepResult result,
+        int remaining,
+        CancellationToken ct)
+    {
+        if (remaining <= 0)
+            return 0;
+
+        var cutoff = request.BranchExpiresBeforeUtc.ToUnixTimeSeconds();
+        var pendingDeletes = new List<string>(capacity: Math.Min(remaining, 256));
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT branch_id, json
+            FROM branches
+            WHERE updated_at < $cutoff
+            ORDER BY updated_at ASC
+            LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$cutoff", cutoff);
+        cmd.Parameters.AddWithValue("$limit", remaining);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            if (remaining <= 0)
+            {
+                result.MaxItemsLimitReached = true;
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
+
+            var branchId = reader.GetString(0);
+            var payloadJson = reader.GetString(1);
+
+            result.EligibleBranches++;
+            remaining--;
+
+            if (request.DryRun)
+                continue;
+
+            if (request.ArchiveEnabled)
+            {
+                try
+                {
+                    await MemoryRetentionArchive.ArchivePayloadAsync(
+                        request.ArchivePath,
+                        request.NowUtc,
+                        kind: "branches",
+                        branchId,
+                        request.BranchExpiresBeforeUtc,
+                        sourceBackend: "sqlite",
+                        payloadJson,
+                        ct);
+                    result.ArchivedBranches++;
+                }
+                catch (Exception ex)
+                {
+                    if (result.Errors.Count < 16)
+                        result.Errors.Add($"Failed to archive branch '{branchId}': {ex.Message}");
+                    continue;
+                }
+            }
+
+            pendingDeletes.Add(branchId);
+        }
+
+        if (pendingDeletes.Count > 0)
+            result.DeletedBranches += await DeleteBranchesByIdAsync(conn, pendingDeletes, ct);
+
+        return remaining;
+    }
+
+    private static async ValueTask<int> DeleteSessionsByIdAsync(
+        SqliteConnection conn,
+        IReadOnlyList<string> ids,
+        CancellationToken ct)
+    {
+        return await DeleteByIdInBatchesAsync(conn, ids, ct, static (cmd, id) =>
+        {
+            cmd.CommandText = "DELETE FROM sessions WHERE id = $id;";
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("$id", id);
+        });
+    }
+
+    private static async ValueTask<int> DeleteBranchesByIdAsync(
+        SqliteConnection conn,
+        IReadOnlyList<string> ids,
+        CancellationToken ct)
+    {
+        return await DeleteByIdInBatchesAsync(conn, ids, ct, static (cmd, id) =>
+        {
+            cmd.CommandText = "DELETE FROM branches WHERE branch_id = $id;";
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("$id", id);
+        });
+    }
+
+    private static async ValueTask<int> DeleteByIdInBatchesAsync(
+        SqliteConnection conn,
+        IReadOnlyList<string> ids,
+        CancellationToken ct,
+        Action<SqliteCommand, string> configureCommand)
+    {
+        if (ids.Count == 0)
+            return 0;
+
+        var deleted = 0;
+        const int batchSize = 100;
+
+        for (var i = 0; i < ids.Count; i += batchSize)
+        {
+            var count = Math.Min(batchSize, ids.Count - i);
+
+            await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+            await using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+
+            for (var j = 0; j < count; j++)
+            {
+                configureCommand(cmd, ids[i + j]);
+                deleted += await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            await tx.CommitAsync(ct);
+        }
+
+        return deleted;
+    }
+
     public void Dispose()
     {
         // No pooled resources at the moment; connections are per-call.
     }
 }
-

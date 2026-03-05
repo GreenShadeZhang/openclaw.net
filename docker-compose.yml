@@ -2,6 +2,7 @@ version: "3.8"
 
 services:
   openclaw:
+    image: ${OPENCLAW_IMAGE:-openclaw.net:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -23,8 +24,11 @@ services:
       - OpenClaw__Tooling__AllowShell=false
       - OpenClaw__Tooling__AllowedReadRoots__0=/app/workspace
       - OpenClaw__Tooling__AllowedWriteRoots__0=/app/workspace
-      - OpenClaw__Security__TrustForwardedHeaders=true
-      - OpenClaw__Security__KnownProxies__0=${PROXY_IP:-172.17.0.1}
+      # Safe default for public binds: disable JS plugin bridge unless explicitly enabled.
+      - OpenClaw__Plugins__Enabled=false
+      # If running behind a reverse proxy (Caddy/nginx), you can enable forwarded headers:
+      # - OpenClaw__Security__TrustForwardedHeaders=true
+      # - OpenClaw__Security__KnownProxies__0=<proxy-ip>
     volumes:
       # Persist memory/session data
       - openclaw-memory:/app/memory

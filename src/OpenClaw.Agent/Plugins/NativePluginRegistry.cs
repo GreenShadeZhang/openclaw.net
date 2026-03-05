@@ -30,7 +30,7 @@ public sealed class NativePluginRegistry : IDisposable
             RegisterTool(new GitTool(config.GitTools), "git-tools");
 
         if (config.CodeExec.Enabled)
-            RegisterTool(new CodeExecTool(config.CodeExec), "code-exec", config.CodeExec.Backend);
+            RegisterTool(new CodeExecTool(config.CodeExec, toolingConfig), "code-exec", config.CodeExec.Backend);
 
         if (config.ImageGen.Enabled)
             RegisterTool(new ImageGenTool(config.ImageGen), "image-gen", config.ImageGen.Provider);
@@ -42,10 +42,10 @@ public sealed class NativePluginRegistry : IDisposable
             RegisterTool(new CalendarTool(config.Calendar), "calendar", config.Calendar.Provider);
 
         if (config.Email.Enabled)
-            RegisterTool(new EmailTool(config.Email), "email");
+            RegisterTool(new EmailTool(config.Email, toolingConfig), "email");
 
         if (config.Database.Enabled)
-            RegisterTool(new DatabaseTool(config.Database, _logger), "database", config.Database.Provider);
+            RegisterTool(new DatabaseTool(config.Database, _logger, toolingConfig), "database", config.Database.Provider);
 
         if (config.InboxZero.Enabled)
             RegisterTool(new InboxZeroTool(config.InboxZero, config.Email), "inbox-zero");
@@ -53,13 +53,13 @@ public sealed class NativePluginRegistry : IDisposable
         if (config.HomeAssistant.Enabled)
         {
             RegisterTool(new HomeAssistantTool(config.HomeAssistant), "home-assistant");
-            RegisterTool(new HomeAssistantWriteTool(config.HomeAssistant), "home-assistant");
+            RegisterTool(new HomeAssistantWriteTool(config.HomeAssistant, null, toolingConfig), "home-assistant");
         }
 
         if (config.Mqtt.Enabled)
         {
             RegisterTool(new MqttTool(config.Mqtt), "mqtt");
-            RegisterTool(new MqttPublishTool(config.Mqtt), "mqtt");
+            RegisterTool(new MqttPublishTool(config.Mqtt, toolingConfig), "mqtt");
         }
     }
 

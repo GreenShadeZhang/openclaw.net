@@ -40,11 +40,15 @@ WORKDIR /app
 
 COPY --from=build /app .
 
-# Default environment variables
-ENV ASPNETCORE_URLS=http://+:18789 \
-    OPENCLAW__BindAddress=0.0.0.0 \
-    OPENCLAW__Port=18789 \
-    OPENCLAW__Memory__StoragePath=/app/memory
+# Default environment variables (safe public-bind defaults).
+# Note: Program.cs binds to `OpenClaw:BindAddress` + `OpenClaw:Port` (not ASPNETCORE_URLS).
+ENV OpenClaw__BindAddress=0.0.0.0 \
+    OpenClaw__Port=18789 \
+    OpenClaw__Memory__StoragePath=/app/memory \
+    OpenClaw__Tooling__AllowShell=false \
+    OpenClaw__Tooling__AllowedReadRoots__0=/app/workspace \
+    OpenClaw__Tooling__AllowedWriteRoots__0=/app/workspace \
+    OpenClaw__Plugins__Enabled=false
 
 EXPOSE 18789
 

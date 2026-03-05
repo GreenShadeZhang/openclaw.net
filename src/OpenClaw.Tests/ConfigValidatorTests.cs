@@ -53,4 +53,91 @@ public sealed class ConfigValidatorTests
         var errors = ConfigValidator.Validate(config);
         Assert.DoesNotContain(errors, error => error.Contains("CronExpression", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void Validate_WebhookHmacEnabledWithoutSecret_ReturnsError()
+    {
+        var config = new GatewayConfig
+        {
+            Webhooks = new WebhooksConfig
+            {
+                Enabled = true,
+                Endpoints = new Dictionary<string, WebhookEndpointConfig>
+                {
+                    ["audit"] = new()
+                    {
+                        ValidateHmac = true,
+                        Secret = null
+                    }
+                }
+            }
+        };
+
+        var errors = ConfigValidator.Validate(config);
+        Assert.Contains(errors, e => e.Contains("ValidateHmac=true", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_WhatsAppSignatureEnabledWithoutAppSecret_ReturnsError()
+    {
+        var config = new GatewayConfig
+        {
+            Channels = new ChannelsConfig
+            {
+                WhatsApp = new WhatsAppChannelConfig
+                {
+                    ValidateSignature = true,
+                    WebhookAppSecret = null,
+                    WebhookAppSecretRef = ""
+                }
+            }
+        };
+
+        var errors = ConfigValidator.Validate(config);
+        Assert.Contains(errors, e => e.Contains("WhatsApp.ValidateSignature", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_RetentionLimitsBelowMinimum_ReturnsErrors()
+    {
+        var config = new GatewayConfig
+        {
+            Memory = new MemoryConfig
+            {
+                Retention = new MemoryRetentionConfig
+                {
+                    SweepIntervalMinutes = 1,
+                    SessionTtlDays = 0,
+                    BranchTtlDays = 0,
+                    ArchiveRetentionDays = 0,
+                    MaxItemsPerSweep = 5
+                }
+            }
+        };
+
+        var errors = ConfigValidator.Validate(config);
+        Assert.Contains(errors, e => e.Contains("Memory.Retention.SweepIntervalMinutes", StringComparison.Ordinal));
+        Assert.Contains(errors, e => e.Contains("Memory.Retention.SessionTtlDays", StringComparison.Ordinal));
+        Assert.Contains(errors, e => e.Contains("Memory.Retention.BranchTtlDays", StringComparison.Ordinal));
+        Assert.Contains(errors, e => e.Contains("Memory.Retention.ArchiveRetentionDays", StringComparison.Ordinal));
+        Assert.Contains(errors, e => e.Contains("Memory.Retention.MaxItemsPerSweep", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_CompactionThresholdMustExceedMaxHistoryTurns_ReturnsError()
+    {
+        var config = new GatewayConfig
+        {
+            Memory = new MemoryConfig
+            {
+                MaxHistoryTurns = 50,
+                EnableCompaction = true,
+                CompactionThreshold = 50,
+                CompactionKeepRecent = 10
+            }
+        };
+
+        var errors = ConfigValidator.Validate(config);
+        Assert.Contains(errors, e => e.Contains("greater than MaxHistoryTurns", StringComparison.Ordinal));
+    }
 }

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
 
@@ -9,11 +10,13 @@ namespace OpenClaw.Agent.Tools;
 public sealed class HomeAssistantWriteTool : ITool, IDisposable
 {
     private readonly HomeAssistantConfig _config;
+    private readonly ToolingConfig? _toolingConfig;
     private readonly HomeAssistantRestClient _rest;
 
-    public HomeAssistantWriteTool(HomeAssistantConfig config, HttpClient? httpClient = null)
+    public HomeAssistantWriteTool(HomeAssistantConfig config, HttpClient? httpClient = null, ToolingConfig? toolingConfig = null)
     {
         _config = config;
+        _toolingConfig = toolingConfig;
         _rest = new HomeAssistantRestClient(config, httpClient);
     }
 
@@ -63,6 +66,9 @@ public sealed class HomeAssistantWriteTool : ITool, IDisposable
 
     public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
     {
+        if (_toolingConfig?.ReadOnlyMode == true)
+            return "Error: home_assistant_write is disabled because Tooling.ReadOnlyMode is enabled.";
+
         using var args = JsonDocument.Parse(argumentsJson);
         var root = args.RootElement;
         var op = root.GetProperty("op").GetString() ?? "";

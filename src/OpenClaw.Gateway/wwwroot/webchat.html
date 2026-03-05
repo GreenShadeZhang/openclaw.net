@@ -164,6 +164,23 @@
             box-shadow: 0 0 15px rgba(168, 85, 247, 0.15);
         }
 
+        #remember-token-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            color: var(--text-secondary);
+            font-size: 0.78rem;
+            white-space: nowrap;
+            user-select: none;
+        }
+
+        #remember-token {
+            accent-color: #a855f7;
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+        }
+
         #doctor-button {
             cursor: pointer;
             font-weight: 500;
@@ -610,6 +627,10 @@
         <div class="header-right">
             <button id="doctor-button" title="Fetch /doctor/text">Doctor</button>
             <input type="password" id="token-input" placeholder="Auth Token (optional)">
+            <label id="remember-token-wrap" title="Persist token in this browser">
+                <input type="checkbox" id="remember-token">
+                Remember
+            </label>
         </div>
     </div>
 
@@ -660,12 +681,45 @@
         const messageInput = document.getElementById('message-input');
         const sendButton = document.getElementById('send-button');
         const tokenInput = document.getElementById('token-input');
+        const rememberToken = document.getElementById('remember-token');
         const doctorButton = document.getElementById('doctor-button');
         const typingRow = document.getElementById('typing-row');
+        const TOKEN_KEY_PERSIST = 'openclaw_token';
+        const TOKEN_KEY_SESSION = 'openclaw_token_session';
 
         let ws = null;
         let activeResponseDiv = null;
         let activeRawContent = "";
+        let reconnectAttempts = 0;
+        let reconnectTimer = null;
+        let streamRenderTimer = null;
+
+        const WEBCHAT_CONFIG = {
+            streamRenderDebounceMs: Math.max(20, Number(window.OPENCLAW_WEBCHAT_CONFIG?.streamRenderDebounceMs ?? 120)),
+            initialReconnectDelayMs: Math.max(250, Number(window.OPENCLAW_WEBCHAT_CONFIG?.initialReconnectDelayMs ?? 1000)),
+            maxReconnectDelayMs: Math.max(1000, Number(window.OPENCLAW_WEBCHAT_CONFIG?.maxReconnectDelayMs ?? 30000)),
+            reconnectBackoffFactor: Math.max(1.1, Number(window.OPENCLAW_WEBCHAT_CONFIG?.reconnectBackoffFactor ?? 2)),
+            maxReconnectAttempts: Math.max(0, Number(window.OPENCLAW_WEBCHAT_CONFIG?.maxReconnectAttempts ?? 0)),
+            retryOnAuthCloseCodes: Boolean(window.OPENCLAW_WEBCHAT_CONFIG?.retryOnAuthCloseCodes ?? false)
+        };
+
+        function getStoredToken() {
+            return sessionStorage.getItem(TOKEN_KEY_SESSION) || localStorage.getItem(TOKEN_KEY_PERSIST) || '';
+        }
+
+        function getCurrentToken() {
+            return tokenInput.value.trim() || getStoredToken();
+        }
+
+        function persistToken(token) {
+            if (!token) return;
+            sessionStorage.setItem(TOKEN_KEY_SESSION, token);
+            if (rememberToken.checked) {
+                localStorage.setItem(TOKEN_KEY_PERSIST, token);
+            } else {
+                localStorage.removeItem(TOKEN_KEY_PERSIST);
+            }
+        }
 
         function preprocessMediaMarkers(raw) {
             const lines = (raw || "").split('\n');
@@ -699,11 +753,49 @@
             scrollToBottom();
         }
 
-        function scrollToBottom() {
+        function scrollToBottom(smooth = true) {
             chatWrapper.scrollTo({
                 top: chatWrapper.scrollHeight,
-                behavior: 'smooth'
+                behavior: smooth ? 'smooth' : 'auto'
             });
+        }
+
+        function renderActiveResponse(finalRender = false) {
+            if (!activeResponseDiv || !activeRawContent) {
+                return;
+            }
+
+            activeResponseDiv.innerHTML = DOMPurify.sanitize(marked.parse(preprocessMediaMarkers(activeRawContent)));
+
+            if (finalRender) {
+                activeResponseDiv.querySelectorAll('pre code').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+                scrollToBottom();
+                return;
+            }
+
+            scrollToBottom(false);
+        }
+
+        function scheduleActiveResponseRender(finalRender = false) {
+            if (finalRender) {
+                if (streamRenderTimer) {
+                    clearTimeout(streamRenderTimer);
+                    streamRenderTimer = null;
+                }
+                renderActiveResponse(true);
+                return;
+            }
+
+            if (streamRenderTimer) {
+                return;
+            }
+
+            streamRenderTimer = setTimeout(() => {
+                streamRenderTimer = null;
+                renderActiveResponse(false);
+            }, WEBCHAT_CONFIG.streamRenderDebounceMs);
         }
 
         function createRow(type) {
@@ -790,18 +882,21 @@
             appendSystem('Connecting to OpenClaw.NET Gateway...');
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const baseWsUrl = `${protocol}//${window.location.host}/ws`;
-            const token = tokenInput.value || localStorage.getItem('openclaw_token') || '';
+            const token = getCurrentToken();
             const wsUrl = token
                 ? `${baseWsUrl}?token=${encodeURIComponent(token)}`
                 : baseWsUrl;
 
-            if (tokenInput.value) {
-                localStorage.setItem('openclaw_token', tokenInput.value);
-            }
+            persistToken(tokenInput.value.trim());
 
             ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
+                reconnectAttempts = 0;
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
                 appendSystem('Connected successfully.');
                 messageInput.disabled = false;
                 sendButton.disabled = false;
@@ -820,14 +915,7 @@
 
                         case 'typing_stop':
                             typingRow.style.display = 'none';
-                            if (activeResponseDiv && activeRawContent) {
-                                const renderHtml = DOMPurify.sanitize(marked.parse(preprocessMediaMarkers(activeRawContent)));
-                                activeResponseDiv.innerHTML = renderHtml;
-                                // Apply syntax highlighting to new code blocks
-                                activeResponseDiv.querySelectorAll('pre code').forEach((block) => {
-                                    hljs.highlightElement(block);
-                                });
-                            }
+                            scheduleActiveResponseRender(true);
                             activeResponseDiv = null;
                             activeRawContent = "";
                             scrollToBottom();
@@ -845,18 +933,12 @@
                             }
 
                             activeRawContent += (env.text ?? env.content ?? "");
-                            activeResponseDiv.innerHTML = DOMPurify.sanitize(marked.parse(preprocessMediaMarkers(activeRawContent)));
-                            scrollToBottom();
+                            scheduleActiveResponseRender(false);
                             break;
 
                         case 'assistant_done':
                             typingRow.style.display = 'none';
-                            if (activeResponseDiv && activeRawContent) {
-                                activeResponseDiv.innerHTML = DOMPurify.sanitize(marked.parse(activeRawContent));
-                                activeResponseDiv.querySelectorAll('pre code').forEach((block) => {
-                                    hljs.highlightElement(block);
-                                });
-                            }
+                            scheduleActiveResponseRender(true);
                             activeResponseDiv = null;
                             activeRawContent = "";
                             scrollToBottom();
@@ -897,17 +979,41 @@
                         chatContainer.insertBefore(row, typingRow);
                     }
                     activeRawContent += event.data;
-                    activeResponseDiv.innerHTML = DOMPurify.sanitize(marked.parse(preprocessMediaMarkers(activeRawContent)));
-                    scrollToBottom();
+                    scheduleActiveResponseRender(false);
                 }
             };
 
-            ws.onclose = () => {
-                appendSystem('Connection dropped. Retrying in 3s...', true);
+            ws.onclose = (event) => {
                 messageInput.disabled = true;
                 sendButton.disabled = true;
                 typingRow.style.display = 'none';
-                setTimeout(connect, 3000);
+
+                if (streamRenderTimer) {
+                    clearTimeout(streamRenderTimer);
+                    streamRenderTimer = null;
+                }
+
+                const isAuthClose = event.code === 1008 || (event.code >= 4000 && event.code < 5000);
+                if (isAuthClose && !WEBCHAT_CONFIG.retryOnAuthCloseCodes) {
+                    appendSystem('Connection closed due to authentication/authorization. Update token and reconnect.', true);
+                    return;
+                }
+
+                reconnectAttempts += 1;
+                if (WEBCHAT_CONFIG.maxReconnectAttempts > 0 && reconnectAttempts > WEBCHAT_CONFIG.maxReconnectAttempts) {
+                    appendSystem('Connection dropped and reconnect limit reached. Refresh to retry.', true);
+                    return;
+                }
+
+                const delay = Math.min(
+                    WEBCHAT_CONFIG.maxReconnectDelayMs,
+                    Math.round(
+                        WEBCHAT_CONFIG.initialReconnectDelayMs *
+                        Math.pow(WEBCHAT_CONFIG.reconnectBackoffFactor, Math.max(0, reconnectAttempts - 1))
+                    )
+                );
+                appendSystem(`Connection dropped. Retrying in ${Math.max(1, Math.ceil(delay / 1000))}s...`, true);
+                reconnectTimer = setTimeout(connect, delay);
             };
 
             ws.onerror = () => {
@@ -966,13 +1072,27 @@
 
         sendButton.addEventListener('click', sendMessage);
 
-        if (localStorage.getItem('openclaw_token')) {
-            tokenInput.value = localStorage.getItem('openclaw_token');
+        const sessionToken = sessionStorage.getItem(TOKEN_KEY_SESSION);
+        const persistedToken = localStorage.getItem(TOKEN_KEY_PERSIST);
+        if (sessionToken) {
+            tokenInput.value = sessionToken;
+        } else if (persistedToken) {
+            tokenInput.value = persistedToken;
+            rememberToken.checked = true;
         }
+
+        rememberToken.addEventListener('change', () => {
+            const token = tokenInput.value.trim();
+            if (rememberToken.checked && token) {
+                localStorage.setItem(TOKEN_KEY_PERSIST, token);
+            } else if (!rememberToken.checked) {
+                localStorage.removeItem(TOKEN_KEY_PERSIST);
+            }
+        });
 
         doctorButton.addEventListener('click', async () => {
             try {
-                const token = tokenInput.value || localStorage.getItem('openclaw_token') || '';
+                const token = getCurrentToken();
                 const headers = {};
                 if (token && token !== 'bypass') {
                     headers['Authorization'] = `Bearer ${token}`;

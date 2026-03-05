@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
 
@@ -17,11 +18,13 @@ namespace OpenClaw.Agent.Tools;
 public sealed class DatabaseTool : ITool, IDisposable
 {
     private readonly DatabaseConfig _config;
+    private readonly ToolingConfig? _toolingConfig;
     private readonly ILogger? _logger;
 
-    public DatabaseTool(DatabaseConfig config, ILogger? logger = null)
+    public DatabaseTool(DatabaseConfig config, ILogger? logger = null, ToolingConfig? toolingConfig = null)
     {
         _config = config;
+        _toolingConfig = toolingConfig;
         _logger = logger;
 
         if (config.AllowWrite)
@@ -57,14 +60,20 @@ public sealed class DatabaseTool : ITool, IDisposable
         }
         """;
 
-    // Patterns that indicate write operations
-    private static readonly string[] WriteKeywords =
-        ["INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE", "REPLACE"];
+    // Keywords that indicate mutating/admin SQL operations.
+    private static readonly HashSet<string> WriteKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE", "REPLACE",
+        "UPSERT", "VACUUM", "REINDEX", "ATTACH", "DETACH", "GRANT", "REVOKE", "SET", "CALL", "EXEC", "EXECUTE"
+    };
 
     public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
     {
         using var args = JsonDocument.Parse(argumentsJson);
         var action = args.RootElement.GetProperty("action").GetString()!.ToLowerInvariant();
+
+        if (_toolingConfig?.ReadOnlyMode == true && action == "execute")
+            return "Error: database execute action is disabled because Tooling.ReadOnlyMode is enabled.";
 
         var connString = ResolveConnectionString();
         if (string.IsNullOrWhiteSpace(connString))
@@ -97,6 +106,10 @@ public sealed class DatabaseTool : ITool, IDisposable
         if (string.IsNullOrWhiteSpace(sql))
             return "Error: 'sql' is required for query action.";
 
+        var policyError = ValidateSqlPolicy(sql);
+        if (policyError is not null)
+            return policyError;
+
         // Block write operations through query action
         if (IsWriteOperation(sql))
             return "Error: Write operations must use the 'execute' action, not 'query'.";
@@ -115,6 +128,10 @@ public sealed class DatabaseTool : ITool, IDisposable
         var sql = args.TryGetProperty("sql", out var s) ? s.GetString() : null;
         if (string.IsNullOrWhiteSpace(sql))
             return "Error: 'sql' is required for execute action.";
+
+        var policyError = ValidateSqlPolicy(sql);
+        if (policyError is not null)
+            return policyError;
 
         if (!_config.AllowWrite && IsWriteOperation(sql))
             return "Error: Write operations are disabled. Set Database.AllowWrite = true to enable.";
@@ -150,8 +167,12 @@ public sealed class DatabaseTool : ITool, IDisposable
         var count = 0;
         while (await reader.ReadAsync(ct))
         {
+            var table = reader.GetString(0);
+            if (!IsTableAllowed(table))
+                continue;
+
             count++;
-            sb.AppendLine($"  {reader.GetString(0)}");
+            sb.AppendLine($"  {table}");
         }
 
         if (count == 0)
@@ -165,6 +186,9 @@ public sealed class DatabaseTool : ITool, IDisposable
         var table = args.TryGetProperty("table", out var t) ? t.GetString() : null;
         if (string.IsNullOrWhiteSpace(table))
             return "Error: 'table' is required for schema action.";
+
+        if (!IsTableAllowed(table))
+            return $"Error: Access denied for table '{table}'.";
 
         var provider = _config.Provider.ToLowerInvariant();
 
@@ -316,13 +340,584 @@ public sealed class DatabaseTool : ITool, IDisposable
 
     private static bool IsWriteOperation(string sql)
     {
-        var trimmed = sql.TrimStart();
-        foreach (var keyword in WriteKeywords)
+        foreach (var token in EnumerateSqlTokens(sql))
         {
-            if (trimmed.StartsWith(keyword, StringComparison.OrdinalIgnoreCase))
+            if (WriteKeywords.Contains(token))
                 return true;
         }
+
         return false;
+    }
+
+    private string? ValidateSqlPolicy(string sql)
+    {
+        if (!_config.AllowMultiStatement && HasMultipleStatements(sql))
+            return "Error: Multiple SQL statements are disabled. Set Database.AllowMultiStatement = true to enable.";
+
+        if (_config.AllowedTables.Length == 0 && _config.DeniedTables.Length == 0)
+            return null;
+
+        var tableRefs = ExtractReferencedTables(sql);
+        foreach (var table in tableRefs)
+        {
+            if (!IsTableAllowed(table))
+                return $"Error: Access denied for table '{table}'.";
+        }
+
+        return null;
+    }
+
+    private bool IsTableAllowed(string tableName)
+    {
+        var normalized = NormalizeIdentifier(tableName);
+
+        foreach (var denied in _config.DeniedTables)
+        {
+            if (IdentifiersEqual(normalized, denied))
+                return false;
+        }
+
+        if (_config.AllowedTables.Length == 0)
+            return true;
+
+        foreach (var allowed in _config.AllowedTables)
+        {
+            if (IdentifiersEqual(normalized, allowed))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IdentifiersEqual(string left, string right)
+        => string.Equals(left, NormalizeIdentifier(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeIdentifier(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+            return trimmed;
+
+        var parts = trimmed.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var p = parts[i].Trim();
+            if ((p.StartsWith('"') && p.EndsWith('"')) ||
+                (p.StartsWith('`') && p.EndsWith('`')) ||
+                (p.StartsWith('[') && p.EndsWith(']')))
+            {
+                p = p[1..^1];
+            }
+
+            parts[i] = p;
+        }
+
+        return string.Join('.', parts);
+    }
+
+    private static bool HasMultipleStatements(string sql)
+    {
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var inBacktickQuote = false;
+        var inBracketQuote = false;
+        var inLineComment = false;
+        var inBlockComment = false;
+
+        for (var i = 0; i < sql.Length; i++)
+        {
+            var c = sql[i];
+            var next = i + 1 < sql.Length ? sql[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (c is '\n' or '\r')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (c == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (c == '\'' && next == '\'')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '\'')
+                    inSingleQuote = false;
+
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (c == '"' && next == '"')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '"')
+                    inDoubleQuote = false;
+
+                continue;
+            }
+
+            if (inBacktickQuote)
+            {
+                if (c == '`')
+                    inBacktickQuote = false;
+                continue;
+            }
+
+            if (inBracketQuote)
+            {
+                if (c == ']')
+                    inBracketQuote = false;
+                continue;
+            }
+
+            if (c == '-' && next == '-')
+            {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (c == '/' && next == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (c == '`')
+            {
+                inBacktickQuote = true;
+                continue;
+            }
+
+            if (c == '[')
+            {
+                inBracketQuote = true;
+                continue;
+            }
+
+            if (c == ';')
+            {
+                for (var j = i + 1; j < sql.Length; j++)
+                {
+                    var tail = sql[j];
+                    if (!char.IsWhiteSpace(tail))
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static IReadOnlySet<string> ExtractReferencedTables(string sql)
+    {
+        var refs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var cleaned = StripSqlLiteralsAndComments(sql);
+        var parts = cleaned.Split(
+            new[] { ' ', '\t', '\r', '\n', '(', ')', ',', ';' },
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (!IsTableKeyword(parts[i]))
+                continue;
+
+            var candidate = ReadNextTableIdentifier(parts, i + 1);
+            if (candidate.Length == 0)
+                continue;
+
+            if (string.Equals(candidate, "SELECT", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            candidate = NormalizeIdentifier(candidate);
+            if (candidate.Length == 0)
+                continue;
+
+            refs.Add(candidate);
+        }
+
+        return refs;
+    }
+
+    private static string ReadNextTableIdentifier(string[] parts, int startIndex)
+    {
+        for (var i = startIndex; i < parts.Length; i++)
+        {
+            var token = parts[i].Trim();
+            if (token.Length == 0)
+                continue;
+
+            if (token.Equals("ONLY", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("LATERAL", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("OUTER", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("INNER", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("LEFT", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("RIGHT", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("FULL", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("CROSS", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var raw = new StringBuilder(token);
+            if (token.StartsWith('[') && !token.EndsWith(']'))
+            {
+                for (var j = i + 1; j < parts.Length; j++)
+                {
+                    raw.Append(' ').Append(parts[j]);
+                    if (parts[j].EndsWith(']'))
+                        break;
+                }
+            }
+
+            return raw.ToString();
+        }
+
+        return string.Empty;
+    }
+
+    private static bool IsTableKeyword(string token)
+        => token.Equals("FROM", StringComparison.OrdinalIgnoreCase)
+           || token.Equals("JOIN", StringComparison.OrdinalIgnoreCase)
+           || token.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+           || token.Equals("INTO", StringComparison.OrdinalIgnoreCase)
+           || token.Equals("TABLE", StringComparison.OrdinalIgnoreCase)
+           || token.Equals("DESCRIBE", StringComparison.OrdinalIgnoreCase);
+
+    private static string StripSqlLiteralsAndComments(string sql)
+    {
+        var sb = new StringBuilder(sql.Length);
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var inBacktickQuote = false;
+        var inBracketQuote = false;
+        var inLineComment = false;
+        var inBlockComment = false;
+
+        for (var i = 0; i < sql.Length; i++)
+        {
+            var c = sql[i];
+            var next = i + 1 < sql.Length ? sql[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (c is '\n' or '\r')
+                {
+                    inLineComment = false;
+                    sb.Append(' ');
+                }
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (c == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                    sb.Append(' ');
+                }
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (c == '\'' && next == '\'')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '\'')
+                    inSingleQuote = false;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (c == '"' && next == '"')
+                {
+                    sb.Append('"');
+                    i++;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inDoubleQuote = false;
+                    sb.Append(c);
+                    continue;
+                }
+
+                sb.Append(c);
+                continue;
+            }
+
+            if (inBacktickQuote)
+            {
+                if (c == '`')
+                {
+                    inBacktickQuote = false;
+                    sb.Append(c);
+                    continue;
+                }
+
+                sb.Append(c);
+                continue;
+            }
+
+            if (inBracketQuote)
+            {
+                if (c == ']')
+                {
+                    inBracketQuote = false;
+                    sb.Append(c);
+                    continue;
+                }
+
+                sb.Append(c);
+                continue;
+            }
+
+            if (c == '-' && next == '-')
+            {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (c == '/' && next == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                inSingleQuote = true;
+                sb.Append(' ');
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inDoubleQuote = true;
+                sb.Append(c);
+                continue;
+            }
+
+            if (c == '`')
+            {
+                inBacktickQuote = true;
+                sb.Append(c);
+                continue;
+            }
+
+            if (c == '[')
+            {
+                inBracketQuote = true;
+                sb.Append(c);
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString();
+    }
+
+    private static IEnumerable<string> EnumerateSqlTokens(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+            yield break;
+
+        var token = new StringBuilder(16);
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var inBacktickQuote = false;
+        var inBracketQuote = false;
+        var inLineComment = false;
+        var inBlockComment = false;
+
+        for (var i = 0; i < sql.Length; i++)
+        {
+            var c = sql[i];
+            var next = i + 1 < sql.Length ? sql[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (c is '\n' or '\r')
+                    inLineComment = false;
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (c == '*' && next == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (c == '\'' && next == '\'')
+                {
+                    i++; // Escaped quote in SQL string literal.
+                    continue;
+                }
+
+                if (c == '\'')
+                    inSingleQuote = false;
+
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (c == '"' && next == '"')
+                {
+                    i++; // Escaped quote in quoted identifier.
+                    continue;
+                }
+
+                if (c == '"')
+                    inDoubleQuote = false;
+
+                continue;
+            }
+
+            if (inBacktickQuote)
+            {
+                if (c == '`')
+                    inBacktickQuote = false;
+                continue;
+            }
+
+            if (inBracketQuote)
+            {
+                if (c == ']')
+                    inBracketQuote = false;
+                continue;
+            }
+
+            if (c == '-' && next == '-')
+            {
+                FlushTokenIfNeeded(token, out var completedToken);
+                if (completedToken is not null)
+                    yield return completedToken;
+                inLineComment = true;
+                i++;
+                continue;
+            }
+
+            if (c == '/' && next == '*')
+            {
+                FlushTokenIfNeeded(token, out var completedToken);
+                if (completedToken is not null)
+                    yield return completedToken;
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                FlushTokenIfNeeded(token, out var completedToken);
+                if (completedToken is not null)
+                    yield return completedToken;
+                inSingleQuote = true;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                FlushTokenIfNeeded(token, out var completedToken);
+                if (completedToken is not null)
+                    yield return completedToken;
+                inDoubleQuote = true;
+                continue;
+            }
+
+            if (c == '`')
+            {
+                FlushTokenIfNeeded(token, out var completedToken);
+                if (completedToken is not null)
+                    yield return completedToken;
+                inBacktickQuote = true;
+                continue;
+            }
+
+            if (c == '[')
+            {
+                FlushTokenIfNeeded(token, out var completedToken);
+                if (completedToken is not null)
+                    yield return completedToken;
+                inBracketQuote = true;
+                continue;
+            }
+
+            if (char.IsLetter(c) || (token.Length > 0 && char.IsDigit(c)))
+            {
+                token.Append(char.ToUpperInvariant(c));
+                continue;
+            }
+
+            FlushTokenIfNeeded(token, out var tokenValue);
+            if (tokenValue is not null)
+                yield return tokenValue;
+        }
+
+        FlushTokenIfNeeded(token, out var trailing);
+        if (trailing is not null)
+            yield return trailing;
+    }
+
+    private static void FlushTokenIfNeeded(StringBuilder token, out string? value)
+    {
+        if (token.Length == 0)
+        {
+            value = null;
+            return;
+        }
+
+        value = token.ToString();
+        token.Clear();
     }
 
     private string? ResolveConnectionString() => SecretResolver.Resolve(_config.ConnectionString);

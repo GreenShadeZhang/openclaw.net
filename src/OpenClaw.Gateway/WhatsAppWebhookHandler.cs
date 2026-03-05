@@ -9,6 +9,9 @@ namespace OpenClaw.Gateway;
 
 internal sealed class WhatsAppWebhookHandler
 {
+    private const string OfficialSignatureHeader = "X-Hub-Signature-256";
+    private const string BridgeTokenHeader = "X-Bridge-Token";
+
     private readonly WhatsAppChannelConfig _config;
     private readonly AllowlistManager _allowlists;
     private readonly RecentSendersStore _recentSenders;
@@ -85,6 +88,9 @@ internal sealed class WhatsAppWebhookHandler
             var body = await ReadBodyWithLimitAsync(context, _config.MaxRequestBytes, ct);
             if (body is null)
                 return WebhookResult.Status(StatusCodes.Status413PayloadTooLarge);
+
+            if (!ValidateOfficialSignature(context, body))
+                return WebhookResult.Unauthorized();
 
             var payload = JsonSerializer.Deserialize(
                 body,
@@ -168,6 +174,9 @@ internal sealed class WhatsAppWebhookHandler
     {
         try
         {
+            if (!ValidateBridgeToken(context))
+                return WebhookResult.Unauthorized();
+
             var body = await ReadBodyWithLimitAsync(context, _config.MaxRequestBytes, ct);
             if (body is null)
                 return WebhookResult.Status(StatusCodes.Status413PayloadTooLarge);
@@ -239,5 +248,47 @@ internal sealed class WhatsAppWebhookHandler
         }
 
         return ms.ToArray();
+    }
+
+    private bool ValidateOfficialSignature(HttpContext context, ReadOnlySpan<byte> body)
+    {
+        if (!_config.ValidateSignature)
+            return true;
+
+        var appSecret = SecretResolver.Resolve(_config.WebhookAppSecretRef) ?? _config.WebhookAppSecret;
+        if (string.IsNullOrWhiteSpace(appSecret))
+        {
+            _logger.LogWarning(
+                "WhatsApp official webhook signature validation is enabled but no app secret is configured.");
+            return false;
+        }
+
+        var provided = context.Request.Headers[OfficialSignatureHeader].ToString();
+        var valid = GatewaySecurity.IsHmacSha256SignatureValid(appSecret, body, provided);
+        if (!valid)
+            _logger.LogWarning("Rejected WhatsApp official webhook due to invalid signature.");
+
+        return valid;
+    }
+
+    private bool ValidateBridgeToken(HttpContext context)
+    {
+        var expectedToken = SecretResolver.Resolve(_config.BridgeTokenRef) ?? _config.BridgeToken;
+        if (string.IsNullOrWhiteSpace(expectedToken))
+            return true;
+
+        var bearer = GatewaySecurity.GetBearerToken(context);
+        if (!string.IsNullOrWhiteSpace(bearer) && GatewaySecurity.IsTokenValid(bearer, expectedToken))
+            return true;
+
+        var bridgeHeader = context.Request.Headers[BridgeTokenHeader].ToString();
+        if (!string.IsNullOrWhiteSpace(bridgeHeader) &&
+            GatewaySecurity.IsTokenValid(bridgeHeader.Trim(), expectedToken))
+        {
+            return true;
+        }
+
+        _logger.LogWarning("Rejected WhatsApp bridge webhook due to missing/invalid bridge token.");
+        return false;
     }
 }

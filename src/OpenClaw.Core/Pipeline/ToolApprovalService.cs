@@ -2,6 +2,13 @@ using System.Collections.Concurrent;
 
 namespace OpenClaw.Core.Pipeline;
 
+public enum ToolApprovalDecisionResult
+{
+    Recorded,
+    NotFound,
+    Unauthorized
+}
+
 public sealed record ToolApprovalRequest
 {
     public required string ApprovalId { get; init; }
@@ -52,12 +59,36 @@ public sealed class ToolApprovalService
     }
 
     public bool TrySetDecision(string approvalId, bool approved)
+        => TrySetDecision(approvalId, approved, requesterChannelId: null, requesterSenderId: null, requireRequesterMatch: false)
+            is ToolApprovalDecisionResult.Recorded;
+
+    public ToolApprovalDecisionResult TrySetDecision(
+        string approvalId,
+        bool approved,
+        string? requesterChannelId,
+        string? requesterSenderId,
+        bool requireRequesterMatch = true)
     {
+        if (!_pending.TryGetValue(approvalId, out var pending))
+            return ToolApprovalDecisionResult.NotFound;
+
+        if (requireRequesterMatch)
+        {
+            if (string.IsNullOrWhiteSpace(requesterChannelId) || string.IsNullOrWhiteSpace(requesterSenderId))
+                return ToolApprovalDecisionResult.Unauthorized;
+
+            if (!string.Equals(requesterChannelId, pending.Request.ChannelId, StringComparison.Ordinal) ||
+                !string.Equals(requesterSenderId, pending.Request.SenderId, StringComparison.Ordinal))
+            {
+                return ToolApprovalDecisionResult.Unauthorized;
+            }
+        }
+
         if (!_pending.TryRemove(approvalId, out var p))
-            return false;
+            return ToolApprovalDecisionResult.NotFound;
 
         p.Tcs.TrySetResult(approved);
-        return true;
+        return ToolApprovalDecisionResult.Recorded;
     }
 
     public async Task<bool> WaitForDecisionAsync(string approvalId, TimeSpan timeout, CancellationToken ct)
@@ -104,4 +135,3 @@ public sealed class ToolApprovalService
         return result;
     }
 }
-

@@ -13,7 +13,7 @@ namespace OpenClaw.Core.Memory;
 /// Sessions and notes are stored as JSON files with URL-safe base64 encoded filenames
 /// to prevent path traversal attacks. Includes in-memory LRU cache for sessions.
 /// </summary>
-public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch
+public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore
 {
     private readonly string _basePath;
     private readonly string _sessionsPath;
@@ -396,6 +396,285 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask<RetentionSweepResult> SweepAsync(
+        RetentionSweepRequest request,
+        IReadOnlySet<string> protectedSessionIds,
+        CancellationToken ct)
+    {
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+        protectedSessionIds ??= new HashSet<string>(StringComparer.Ordinal);
+
+        var result = new RetentionSweepResult
+        {
+            StartedAtUtc = request.NowUtc,
+            DryRun = request.DryRun
+        };
+
+        var remaining = Math.Max(1, request.MaxItems);
+        remaining = await SweepSessionFilesAsync(request, protectedSessionIds, result, remaining, ct);
+        if (remaining > 0)
+            remaining = await SweepBranchFilesAsync(request, result, remaining, ct);
+
+        if (remaining <= 0)
+            result.MaxItemsLimitReached = true;
+
+        if (request.ArchiveEnabled && !request.DryRun)
+        {
+            var purgeResult = MemoryRetentionArchive.PurgeExpiredArchives(
+                request.ArchivePath,
+                request.NowUtc,
+                request.ArchiveRetentionDays,
+                ct);
+            result.ArchivePurgedFiles = purgeResult.DeletedFiles;
+            result.ArchivePurgeErrors = purgeResult.Errors;
+            foreach (var error in purgeResult.ErrorMessages)
+            {
+                if (result.Errors.Count >= 16)
+                    break;
+                result.Errors.Add(error);
+            }
+        }
+
+        result.CompletedAtUtc = DateTimeOffset.UtcNow;
+        return result;
+    }
+
+    public ValueTask<RetentionStoreStats> GetRetentionStatsAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(new RetentionStoreStats
+        {
+            Backend = "file",
+            PersistedSessions = CountJsonFilesSafe(_sessionsPath),
+            PersistedBranches = CountJsonFilesSafe(_branchesPath)
+        });
+    }
+
+    private async ValueTask<int> SweepSessionFilesAsync(
+        RetentionSweepRequest request,
+        IReadOnlySet<string> protectedSessionIds,
+        RetentionSweepResult result,
+        int remaining,
+        CancellationToken ct)
+    {
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(_sessionsPath, "*.json");
+        }
+        catch (Exception ex)
+        {
+            if (result.Errors.Count < 16)
+                result.Errors.Add($"Failed to enumerate session files: {ex.Message}");
+            return remaining;
+        }
+
+        foreach (var file in files)
+        {
+            if (remaining <= 0)
+            {
+                result.MaxItemsLimitReached = true;
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
+
+            string payloadJson;
+            try
+            {
+                payloadJson = await File.ReadAllTextAsync(file, ct);
+            }
+            catch
+            {
+                result.SkippedCorruptSessionItems++;
+                continue;
+            }
+
+            Session? session;
+            try
+            {
+                session = JsonSerializer.Deserialize(payloadJson, CoreJsonContext.Default.Session);
+            }
+            catch
+            {
+                session = null;
+            }
+
+            if (session is null)
+            {
+                result.SkippedCorruptSessionItems++;
+                continue;
+            }
+
+            if (protectedSessionIds.Contains(session.Id))
+            {
+                result.SkippedProtectedSessions++;
+                continue;
+            }
+
+            if (session.LastActiveAt >= request.SessionExpiresBeforeUtc)
+                continue;
+
+            result.EligibleSessions++;
+            remaining--;
+
+            if (request.DryRun)
+                continue;
+
+            if (request.ArchiveEnabled)
+            {
+                try
+                {
+                    await MemoryRetentionArchive.ArchivePayloadAsync(
+                        request.ArchivePath,
+                        request.NowUtc,
+                        kind: "sessions",
+                        session.Id,
+                        request.SessionExpiresBeforeUtc,
+                        sourceBackend: "file",
+                        payloadJson,
+                        ct);
+                    result.ArchivedSessions++;
+                }
+                catch (Exception ex)
+                {
+                    if (result.Errors.Count < 16)
+                        result.Errors.Add($"Failed to archive session '{session.Id}': {ex.Message}");
+                    continue;
+                }
+            }
+
+            try
+            {
+                File.Delete(file);
+                _sessionCache.Remove(session.Id);
+                result.DeletedSessions++;
+            }
+            catch (Exception ex)
+            {
+                if (result.Errors.Count < 16)
+                    result.Errors.Add($"Failed to delete session '{session.Id}': {ex.Message}");
+            }
+        }
+
+        return remaining;
+    }
+
+    private async ValueTask<int> SweepBranchFilesAsync(
+        RetentionSweepRequest request,
+        RetentionSweepResult result,
+        int remaining,
+        CancellationToken ct)
+    {
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(_branchesPath, "*.json");
+        }
+        catch (Exception ex)
+        {
+            if (result.Errors.Count < 16)
+                result.Errors.Add($"Failed to enumerate branch files: {ex.Message}");
+            return remaining;
+        }
+
+        foreach (var file in files)
+        {
+            if (remaining <= 0)
+            {
+                result.MaxItemsLimitReached = true;
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
+
+            string payloadJson;
+            try
+            {
+                payloadJson = await File.ReadAllTextAsync(file, ct);
+            }
+            catch
+            {
+                result.SkippedCorruptBranchItems++;
+                continue;
+            }
+
+            SessionBranch? branch;
+            try
+            {
+                branch = JsonSerializer.Deserialize(payloadJson, CoreJsonContext.Default.SessionBranch);
+            }
+            catch
+            {
+                branch = null;
+            }
+
+            if (branch is null)
+            {
+                result.SkippedCorruptBranchItems++;
+                continue;
+            }
+
+            if (branch.CreatedAt >= request.BranchExpiresBeforeUtc)
+                continue;
+
+            result.EligibleBranches++;
+            remaining--;
+
+            if (request.DryRun)
+                continue;
+
+            if (request.ArchiveEnabled)
+            {
+                try
+                {
+                    await MemoryRetentionArchive.ArchivePayloadAsync(
+                        request.ArchivePath,
+                        request.NowUtc,
+                        kind: "branches",
+                        branch.BranchId,
+                        request.BranchExpiresBeforeUtc,
+                        sourceBackend: "file",
+                        payloadJson,
+                        ct);
+                    result.ArchivedBranches++;
+                }
+                catch (Exception ex)
+                {
+                    if (result.Errors.Count < 16)
+                        result.Errors.Add($"Failed to archive branch '{branch.BranchId}': {ex.Message}");
+                    continue;
+                }
+            }
+
+            try
+            {
+                File.Delete(file);
+                result.DeletedBranches++;
+            }
+            catch (Exception ex)
+            {
+                if (result.Errors.Count < 16)
+                    result.Errors.Add($"Failed to delete branch '{branch.BranchId}': {ex.Message}");
+            }
+        }
+
+        return remaining;
+    }
+
+    private static long CountJsonFilesSafe(string path)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(path, "*.json").LongCount();
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     private ValueTask AddToCacheAsync(string sessionId, Session session)

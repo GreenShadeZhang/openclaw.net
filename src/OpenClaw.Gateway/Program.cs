@@ -190,6 +190,17 @@ else
         config.Memory.MaxCachedSessions ?? config.MaxConcurrentSessions);
 }
 var runtimeMetrics = new RuntimeMetrics();
+builder.Services.AddSingleton(config);
+builder.Services.AddSingleton<IMemoryStore>(memoryStore);
+builder.Services.AddSingleton(runtimeMetrics);
+builder.Services.AddSingleton(sp =>
+    new SessionManager(
+        sp.GetRequiredService<IMemoryStore>(),
+        config,
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger("SessionManager")));
+builder.Services.AddSingleton<MemoryRetentionSweeperService>();
+builder.Services.AddSingleton<IMemoryRetentionCoordinator>(sp => sp.GetRequiredService<MemoryRetentionSweeperService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<MemoryRetentionSweeperService>());
 var pipeline = new MessagePipeline();
 var wsChannel = new WebSocketChannel(config.WebSocket);
 
@@ -306,8 +317,8 @@ channelAdapters["cron"] = new CronChannel(
     config.Memory.StoragePath,
     app.Services.GetRequiredService<ILoggerFactory>().CreateLogger<CronChannel>());
 
-var sessionLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SessionManager");
-var sessionManager = new SessionManager(memoryStore, config, sessionLogger);
+var sessionManager = app.Services.GetRequiredService<SessionManager>();
+var retentionCoordinator = app.Services.GetRequiredService<IMemoryRetentionCoordinator>();
 
 var pairingLogger = app.Services.GetRequiredService<ILogger<PairingManager>>();
 var pairingManager = new PairingManager(config.Memory.StoragePath, pairingLogger);
@@ -567,6 +578,44 @@ app.MapGet("/metrics", (HttpContext ctx) =>
     return Results.Json(runtimeMetrics.Snapshot(), CoreJsonContext.Default.MetricsSnapshot);
 });
 
+app.MapGet("/memory/retention/status", async (HttpContext ctx) =>
+{
+    if (!IsAuthorizedRequest(ctx, isNonLoopbackBind, config))
+        return Results.Unauthorized();
+
+    var status = await retentionCoordinator.GetStatusAsync(ctx.RequestAborted);
+    return Results.Ok(new
+    {
+        retention = config.Memory.Retention,
+        status
+    });
+});
+
+app.MapPost("/memory/retention/sweep", async (HttpContext ctx, bool dryRun) =>
+{
+    if (!IsAuthorizedRequest(ctx, isNonLoopbackBind, config))
+        return Results.Unauthorized();
+
+    try
+    {
+        var result = await retentionCoordinator.SweepNowAsync(dryRun, ctx.RequestAborted);
+        return Results.Ok(new
+        {
+            success = true,
+            dryRun,
+            result
+        });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new
+        {
+            success = false,
+            error = ex.Message
+        });
+    }
+});
+
 // ── OpenAI-Compatible HTTP Surface ─────────────────────────────────────
 // POST /v1/chat/completions — drop-in for any OpenAI-SDK client
 app.MapPost("/v1/chat/completions", async (HttpContext ctx) =>
@@ -630,105 +679,112 @@ app.MapPost("/v1/chat/completions", async (HttpContext ctx) =>
     if (req.Model is not null)
         session.ModelOverride = req.Model;
 
-    // Inject prior messages as conversation context (everything except the last user turn we extracted as userText).
-    // OpenAI clients resend full transcript each request; the gateway creates an ephemeral session per HTTP request.
-    var lastUserIndex = req.Messages.FindLastIndex(m =>
-        string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase));
-    var excludeIndex = lastUserIndex >= 0 ? lastUserIndex : req.Messages.Count - 1;
-
-    for (var i = 0; i < req.Messages.Count; i++)
+    try
     {
-        if (i == excludeIndex)
-            continue;
+        // Inject prior messages as conversation context (everything except the last user turn we extracted as userText).
+        // OpenAI clients resend full transcript each request; the gateway creates an ephemeral session per HTTP request.
+        var lastUserIndex = req.Messages.FindLastIndex(m =>
+            string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase));
+        var excludeIndex = lastUserIndex >= 0 ? lastUserIndex : req.Messages.Count - 1;
 
-        var m = req.Messages[i];
-        if (string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase))
+        for (var i = 0; i < req.Messages.Count; i++)
         {
-            session.History.Add(new ChatTurn { Role = m.Role.ToLowerInvariant(), Content = m.Content });
-        }
-    }
+            if (i == excludeIndex)
+                continue;
 
-    var completionId = $"chatcmpl-{Guid.NewGuid():N}"[..29];
-    var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-    var model = req.Model ?? config.Llm.Model;
-
-    if (req.Stream)
-    {
-        // SSE streaming
-        ctx.Response.ContentType = "text/event-stream";
-        ctx.Response.Headers.CacheControl = "no-cache";
-        ctx.Response.Headers.Connection = "keep-alive";
-
-        // Send initial role chunk
-        var roleChunk = new OpenAiStreamChunk
-        {
-            Id = completionId, Created = created, Model = model,
-            Choices = [new OpenAiStreamChoice { Index = 0, Delta = new OpenAiDelta { Role = "assistant" } }]
-        };
-        var roleJson = JsonSerializer.Serialize(roleChunk, CoreJsonContext.Default.OpenAiStreamChunk);
-        await ctx.Response.WriteAsync($"data: {roleJson}\n\n", ctx.RequestAborted);
-        await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
-
-        await foreach (var evt in agentRuntime.RunStreamingAsync(session, userText ?? "", ctx.RequestAborted))
-        {
-            if (evt.Type == AgentStreamEventType.TextDelta && !string.IsNullOrEmpty(evt.Content))
+            var m = req.Messages[i];
+            if (string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase))
             {
-                var chunk = new OpenAiStreamChunk
-                {
-                    Id = completionId, Created = created, Model = model,
-                    Choices = [new OpenAiStreamChoice { Index = 0, Delta = new OpenAiDelta { Content = evt.Content } }]
-                };
-                var json = JsonSerializer.Serialize(chunk, CoreJsonContext.Default.OpenAiStreamChunk);
-                await ctx.Response.WriteAsync($"data: {json}\n\n", ctx.RequestAborted);
-                await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
-            }
-            else if (evt.Type == AgentStreamEventType.Done)
-            {
-                var doneChunk = new OpenAiStreamChunk
-                {
-                    Id = completionId, Created = created, Model = model,
-                    Choices = [new OpenAiStreamChoice { Index = 0, Delta = new OpenAiDelta(), FinishReason = "stop" }]
-                };
-                var doneJson = JsonSerializer.Serialize(doneChunk, CoreJsonContext.Default.OpenAiStreamChunk);
-                await ctx.Response.WriteAsync($"data: {doneJson}\n\n", ctx.RequestAborted);
-                await ctx.Response.WriteAsync("data: [DONE]\n\n", ctx.RequestAborted);
-                await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+                session.History.Add(new ChatTurn { Role = m.Role.ToLowerInvariant(), Content = m.Content });
             }
         }
-    }
-    else
-    {
-        // Non-streaming
-        var result = await agentRuntime.RunAsync(session, userText ?? "", ctx.RequestAborted);
 
-        var response = new OpenAiChatCompletionResponse
+        var completionId = $"chatcmpl-{Guid.NewGuid():N}"[..29];
+        var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var model = req.Model ?? config.Llm.Model;
+
+        if (req.Stream)
         {
-            Id = completionId,
-            Created = created,
-            Model = model,
-            Choices =
-            [
-                new OpenAiChoice
+            // SSE streaming
+            ctx.Response.ContentType = "text/event-stream";
+            ctx.Response.Headers.CacheControl = "no-cache";
+            ctx.Response.Headers.Connection = "keep-alive";
+
+            // Send initial role chunk
+            var roleChunk = new OpenAiStreamChunk
+            {
+                Id = completionId, Created = created, Model = model,
+                Choices = [new OpenAiStreamChoice { Index = 0, Delta = new OpenAiDelta { Role = "assistant" } }]
+            };
+            var roleJson = JsonSerializer.Serialize(roleChunk, CoreJsonContext.Default.OpenAiStreamChunk);
+            await ctx.Response.WriteAsync($"data: {roleJson}\n\n", ctx.RequestAborted);
+            await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+
+            await foreach (var evt in agentRuntime.RunStreamingAsync(session, userText ?? "", ctx.RequestAborted))
+            {
+                if (evt.Type == AgentStreamEventType.TextDelta && !string.IsNullOrEmpty(evt.Content))
                 {
-                    Index = 0,
-                    Message = new OpenAiResponseMessage { Role = "assistant", Content = result },
-                    FinishReason = "stop"
+                    var chunk = new OpenAiStreamChunk
+                    {
+                        Id = completionId, Created = created, Model = model,
+                        Choices = [new OpenAiStreamChoice { Index = 0, Delta = new OpenAiDelta { Content = evt.Content } }]
+                    };
+                    var json = JsonSerializer.Serialize(chunk, CoreJsonContext.Default.OpenAiStreamChunk);
+                    await ctx.Response.WriteAsync($"data: {json}\n\n", ctx.RequestAborted);
+                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
                 }
-            ],
-            Usage = new OpenAiUsage
-            {
-                PromptTokens = (int)session.TotalInputTokens,
-                CompletionTokens = (int)session.TotalOutputTokens,
-                TotalTokens = (int)(session.TotalInputTokens + session.TotalOutputTokens)
+                else if (evt.Type == AgentStreamEventType.Done)
+                {
+                    var doneChunk = new OpenAiStreamChunk
+                    {
+                        Id = completionId, Created = created, Model = model,
+                        Choices = [new OpenAiStreamChoice { Index = 0, Delta = new OpenAiDelta(), FinishReason = "stop" }]
+                    };
+                    var doneJson = JsonSerializer.Serialize(doneChunk, CoreJsonContext.Default.OpenAiStreamChunk);
+                    await ctx.Response.WriteAsync($"data: {doneJson}\n\n", ctx.RequestAborted);
+                    await ctx.Response.WriteAsync("data: [DONE]\n\n", ctx.RequestAborted);
+                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+                }
             }
-        };
+        }
+        else
+        {
+            // Non-streaming
+            var result = await agentRuntime.RunAsync(session, userText ?? "", ctx.RequestAborted);
 
-        ctx.Response.ContentType = "application/json";
-        await ctx.Response.WriteAsync(
-            JsonSerializer.Serialize(response, CoreJsonContext.Default.OpenAiChatCompletionResponse),
-            ctx.RequestAborted);
+            var response = new OpenAiChatCompletionResponse
+            {
+                Id = completionId,
+                Created = created,
+                Model = model,
+                Choices =
+                [
+                    new OpenAiChoice
+                    {
+                        Index = 0,
+                        Message = new OpenAiResponseMessage { Role = "assistant", Content = result },
+                        FinishReason = "stop"
+                    }
+                ],
+                Usage = new OpenAiUsage
+                {
+                    PromptTokens = (int)session.TotalInputTokens,
+                    CompletionTokens = (int)session.TotalOutputTokens,
+                    TotalTokens = (int)(session.TotalInputTokens + session.TotalOutputTokens)
+                }
+            };
+
+            ctx.Response.ContentType = "application/json";
+            await ctx.Response.WriteAsync(
+                JsonSerializer.Serialize(response, CoreJsonContext.Default.OpenAiChatCompletionResponse),
+                ctx.RequestAborted);
+        }
+    }
+    finally
+    {
+        sessionManager.RemoveActive(session.Id);
     }
 });
 
@@ -786,36 +842,43 @@ app.MapPost("/v1/responses", async (HttpContext ctx) =>
     if (req.Model is not null)
         session.ModelOverride = req.Model;
 
-    var result = await agentRuntime.RunAsync(session, req.Input, ctx.RequestAborted);
-
-    var responseId = $"resp-{Guid.NewGuid():N}"[..24];
-    var msgId = $"msg-{Guid.NewGuid():N}"[..23];
-
-    var response = new OpenAiResponseResponse
+    try
     {
-        Id = responseId,
-        Status = "completed",
-        Output =
-        [
-            new OpenAiResponseOutput
-            {
-                Id = msgId,
-                Role = "assistant",
-                Content = [new OpenAiResponseContent { Text = result }]
-            }
-        ],
-        Usage = new OpenAiUsage
-        {
-            PromptTokens = (int)session.TotalInputTokens,
-            CompletionTokens = (int)session.TotalOutputTokens,
-            TotalTokens = (int)(session.TotalInputTokens + session.TotalOutputTokens)
-        }
-    };
+        var result = await agentRuntime.RunAsync(session, req.Input, ctx.RequestAborted);
 
-    ctx.Response.ContentType = "application/json";
-    await ctx.Response.WriteAsync(
-        JsonSerializer.Serialize(response, CoreJsonContext.Default.OpenAiResponseResponse),
-        ctx.RequestAborted);
+        var responseId = $"resp-{Guid.NewGuid():N}"[..24];
+        var msgId = $"msg-{Guid.NewGuid():N}"[..23];
+
+        var response = new OpenAiResponseResponse
+        {
+            Id = responseId,
+            Status = "completed",
+            Output =
+            [
+                new OpenAiResponseOutput
+                {
+                    Id = msgId,
+                    Role = "assistant",
+                    Content = [new OpenAiResponseContent { Text = result }]
+                }
+            ],
+            Usage = new OpenAiUsage
+            {
+                PromptTokens = (int)session.TotalInputTokens,
+                CompletionTokens = (int)session.TotalOutputTokens,
+                TotalTokens = (int)(session.TotalInputTokens + session.TotalOutputTokens)
+            }
+        };
+
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsync(
+            JsonSerializer.Serialize(response, CoreJsonContext.Default.OpenAiResponseResponse),
+            ctx.RequestAborted);
+    }
+    finally
+    {
+        sessionManager.RemoveActive(session.Id);
+    }
 });
 
 var sessionLocks = new System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim>();
@@ -850,6 +913,7 @@ GatewayWorkers.Start(
     app.Lifetime,
     programLogger,
     workerCount,
+    isNonLoopbackBind,
     sessionManager,
     sessionLocks,
     lockLastUsed,
@@ -1020,7 +1084,7 @@ static string ResolveWorkspaceRoot(string? value)
 
 static string ToBoolEmoji(bool value) => value ? "yes" : "no";
 
-app.MapGet("/doctor", (HttpContext ctx) =>
+app.MapGet("/doctor", async (HttpContext ctx) =>
 {
     if (isNonLoopbackBind)
     {
@@ -1031,6 +1095,18 @@ app.MapGet("/doctor", (HttpContext ctx) =>
 
     var wsRoot = ResolveWorkspaceRoot(config.Tooling.WorkspaceRoot);
     var wsExists = !string.IsNullOrWhiteSpace(wsRoot) && Directory.Exists(wsRoot);
+    var retentionStatus = await retentionCoordinator.GetStatusAsync(ctx.RequestAborted);
+    const long retentionDisabledWarningThreshold = 2_000;
+    string? retentionWarning = null;
+    if (!config.Memory.Retention.Enabled && retentionStatus.StoreStats is not null)
+    {
+        var totalPersisted = retentionStatus.StoreStats.PersistedSessions + retentionStatus.StoreStats.PersistedBranches;
+        if (totalPersisted >= retentionDisabledWarningThreshold)
+        {
+            retentionWarning =
+                $"Retention is disabled while persisted sessions+branches={totalPersisted} (threshold={retentionDisabledWarningThreshold}).";
+        }
+    }
 
     var report = new
     {
@@ -1083,7 +1159,20 @@ app.MapGet("/doctor", (HttpContext ctx) =>
             provider = config.Memory.Provider,
             storagePath = config.Memory.StoragePath,
             sqlite = new { config.Memory.Sqlite.DbPath, config.Memory.Sqlite.EnableFts, config.Memory.Sqlite.EnableVectors },
-            recall = new { config.Memory.Recall.Enabled, config.Memory.Recall.MaxNotes, config.Memory.Recall.MaxChars }
+            recall = new { config.Memory.Recall.Enabled, config.Memory.Recall.MaxNotes, config.Memory.Recall.MaxChars },
+            retention = new
+            {
+                config.Memory.Retention.Enabled,
+                config.Memory.Retention.RunOnStartup,
+                config.Memory.Retention.SweepIntervalMinutes,
+                config.Memory.Retention.SessionTtlDays,
+                config.Memory.Retention.BranchTtlDays,
+                config.Memory.Retention.ArchiveEnabled,
+                config.Memory.Retention.ArchivePath,
+                config.Memory.Retention.ArchiveRetentionDays,
+                config.Memory.Retention.MaxItemsPerSweep,
+                status = retentionStatus
+            }
         },
         cron = new
         {
@@ -1099,13 +1188,14 @@ app.MapGet("/doctor", (HttpContext ctx) =>
         {
             count = skills.Count,
             names = skills.Select(s => s.Name).ToArray()
-        }
+        },
+        warnings = retentionWarning is null ? Array.Empty<string>() : [retentionWarning]
     };
 
     return Results.Ok(report);
 });
 
-app.MapGet("/doctor/text", (HttpContext ctx) =>
+app.MapGet("/doctor/text", async (HttpContext ctx) =>
 {
     if (isNonLoopbackBind)
     {
@@ -1116,6 +1206,11 @@ app.MapGet("/doctor/text", (HttpContext ctx) =>
 
     var wsRoot = ResolveWorkspaceRoot(config.Tooling.WorkspaceRoot);
     var wsExists = !string.IsNullOrWhiteSpace(wsRoot) && Directory.Exists(wsRoot);
+    var retentionStatus = await retentionCoordinator.GetStatusAsync(ctx.RequestAborted);
+    const long retentionDisabledWarningThreshold = 2_000;
+    var persistedScopedItems = retentionStatus.StoreStats is null
+        ? 0
+        : retentionStatus.StoreStats.PersistedSessions + retentionStatus.StoreStats.PersistedBranches;
 
     var sb = new StringBuilder();
     sb.AppendLine("OpenClaw.NET Doctor");
@@ -1156,6 +1251,29 @@ app.MapGet("/doctor/text", (HttpContext ctx) =>
     sb.AppendLine($"- provider: {config.Memory.Provider}");
     sb.AppendLine($"- sqlite_fts: {ToBoolEmoji(config.Memory.Sqlite.EnableFts)}");
     sb.AppendLine($"- recall_enabled: {ToBoolEmoji(config.Memory.Recall.Enabled)} max_notes={config.Memory.Recall.MaxNotes} max_chars={config.Memory.Recall.MaxChars}");
+    sb.AppendLine($"- retention_enabled: {ToBoolEmoji(config.Memory.Retention.Enabled)} interval_minutes={config.Memory.Retention.SweepIntervalMinutes} startup_sweep={ToBoolEmoji(config.Memory.Retention.RunOnStartup)}");
+    sb.AppendLine($"- retention_ttls_days: sessions={config.Memory.Retention.SessionTtlDays} branches={config.Memory.Retention.BranchTtlDays}");
+    sb.AppendLine($"- retention_archive: enabled={ToBoolEmoji(config.Memory.Retention.ArchiveEnabled)} path={config.Memory.Retention.ArchivePath} ttl_days={config.Memory.Retention.ArchiveRetentionDays}");
+    sb.AppendLine($"- retention_max_items_per_sweep: {config.Memory.Retention.MaxItemsPerSweep}");
+    sb.AppendLine($"- retention_store_support: {ToBoolEmoji(retentionStatus.StoreSupportsRetention)} backend={retentionStatus.StoreStats?.Backend ?? "n/a"}");
+    if (retentionStatus.StoreStats is not null)
+    {
+        sb.AppendLine($"- persisted_sessions: {retentionStatus.StoreStats.PersistedSessions}");
+        sb.AppendLine($"- persisted_branches: {retentionStatus.StoreStats.PersistedBranches}");
+    }
+    sb.AppendLine($"- retention_last_run_success: {ToBoolEmoji(retentionStatus.LastRunSucceeded)} duration_ms={retentionStatus.LastRunDurationMs}");
+    if (retentionStatus.LastRunStartedAtUtc is not null)
+        sb.AppendLine($"- retention_last_run_started_utc: {retentionStatus.LastRunStartedAtUtc:O}");
+    if (retentionStatus.LastRunCompletedAtUtc is not null)
+        sb.AppendLine($"- retention_last_run_completed_utc: {retentionStatus.LastRunCompletedAtUtc:O}");
+    sb.AppendLine($"- retention_totals: runs={retentionStatus.TotalRuns} errors={retentionStatus.TotalSweepErrors} archived={retentionStatus.TotalArchivedItems} deleted={retentionStatus.TotalDeletedItems}");
+    if (!string.IsNullOrWhiteSpace(retentionStatus.LastError))
+        sb.AppendLine($"- retention_last_error: {retentionStatus.LastError}");
+
+    if (!config.Memory.Retention.Enabled && persistedScopedItems >= retentionDisabledWarningThreshold)
+    {
+        sb.AppendLine($"- warning: retention is disabled while persisted sessions+branches={persistedScopedItems} (threshold={retentionDisabledWarningThreshold})");
+    }
     sb.AppendLine();
 
     sb.AppendLine("Cron");
@@ -1181,11 +1299,17 @@ app.MapGet("/doctor/text", (HttpContext ctx) =>
         sb.AppendLine("- Approvals: when prompted, reply with `/approve <approvalId> yes` (or use POST /tools/approve).");
     if (config.Memory.Provider.Equals("file", StringComparison.OrdinalIgnoreCase))
         sb.AppendLine("- Consider Memory.Provider=sqlite and Memory.Sqlite.EnableFts=true for faster recall.");
+    if (!config.Memory.Retention.Enabled)
+        sb.AppendLine("- Consider enabling OpenClaw:Memory:Retention:Enabled=true and start with POST /memory/retention/sweep?dryRun=true.");
+    if (config.Memory.EnableCompaction)
+        sb.AppendLine("- Compaction is enabled; ensure CompactionThreshold remains greater than MaxHistoryTurns.");
+    else
+        sb.AppendLine("- History compaction remains disabled by default; enable only after validating prompt/summary quality.");
 
     return Results.Text(sb.ToString(), "text/plain; charset=utf-8");
 });
 
-app.MapPost("/tools/approve", (HttpContext ctx, string approvalId, bool approved) =>
+app.MapPost("/tools/approve", (HttpContext ctx, string approvalId, bool approved, string? requesterChannelId, string? requesterSenderId) =>
 {
     if (isNonLoopbackBind)
     {
@@ -1197,10 +1321,38 @@ app.MapPost("/tools/approve", (HttpContext ctx, string approvalId, bool approved
     if (string.IsNullOrWhiteSpace(approvalId))
         return Results.BadRequest(new { success = false, error = "approvalId is required." });
 
-    var ok = toolApprovalService.TrySetDecision(approvalId, approved);
-    return ok
-        ? Results.Ok(new { success = true })
-        : Results.NotFound(new { success = false, error = "No pending approval found for that id." });
+    if (!config.Security.RequireRequesterMatchForHttpToolApproval)
+    {
+        var ok = toolApprovalService.TrySetDecision(approvalId, approved);
+        return ok
+            ? Results.Ok(new { success = true, mode = "admin_override" })
+            : Results.NotFound(new { success = false, error = "No pending approval found for that id." });
+    }
+
+    if (string.IsNullOrWhiteSpace(requesterChannelId) || string.IsNullOrWhiteSpace(requesterSenderId))
+    {
+        return Results.BadRequest(new
+        {
+            success = false,
+            error = "requesterChannelId and requesterSenderId are required when RequireRequesterMatchForHttpToolApproval=true."
+        });
+    }
+
+    var decisionResult = toolApprovalService.TrySetDecision(
+        approvalId,
+        approved,
+        requesterChannelId,
+        requesterSenderId,
+        requireRequesterMatch: true);
+
+    return decisionResult switch
+    {
+        ToolApprovalDecisionResult.Recorded => Results.Ok(new { success = true, mode = "requester_match" }),
+        ToolApprovalDecisionResult.Unauthorized => Results.Json(
+            new { success = false, error = "Requester does not match pending approval owner." },
+            statusCode: StatusCodes.Status403Forbidden),
+        _ => Results.NotFound(new { success = false, error = "No pending approval found for that id." })
+    };
 });
 
 // WebSocket endpoint — the primary control plane
@@ -1488,11 +1640,17 @@ if (config.Webhooks.Enabled)
         if (body.Length > hookCfg.MaxBodyLength)
             body = body[..hookCfg.MaxBodyLength];
 
-        if (hookCfg.ValidateHmac && !string.IsNullOrWhiteSpace(hookCfg.Secret))
+        if (hookCfg.ValidateHmac)
         {
+            var secret = SecretResolver.Resolve(hookCfg.Secret);
+            if (string.IsNullOrWhiteSpace(secret))
+            {
+                ctx.Response.StatusCode = 401;
+                return;
+            }
+
             var signatureHeader = ctx.Request.Headers[hookCfg.HmacHeader].ToString();
-            var computed = GatewaySecurity.ComputeHmacSha256Hex(hookCfg.Secret, body);
-            if (!string.Equals(signatureHeader, computed, StringComparison.OrdinalIgnoreCase))
+            if (!GatewaySecurity.IsHmacSha256SignatureValid(secret, body, signatureHeader))
             {
                 ctx.Response.StatusCode = 401;
                 return;

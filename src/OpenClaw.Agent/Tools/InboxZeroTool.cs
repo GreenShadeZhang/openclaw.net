@@ -15,6 +15,7 @@ public sealed class InboxZeroTool : ITool, IDisposable
 {
     private readonly InboxZeroConfig _config;
     private readonly EmailConfig _emailConfig;
+    private int MaxImapResponseLines => Math.Clamp(_config.MaxResponseLinesPerCommand, 100, 200_000);
 
     // Built-in protected domains (banks, healthcare, travel, major tech)
     private static readonly HashSet<string> BuiltInProtectedDomains = new(StringComparer.OrdinalIgnoreCase)
@@ -96,6 +97,9 @@ public sealed class InboxZeroTool : ITool, IDisposable
     {
         var folder = args.TryGetProperty("folder", out var f) ? f.GetString() ?? "INBOX" : "INBOX";
         var count = GetCount(args);
+        folder = InputSanitizer.StripCrlf(folder);
+        var folderError = InputSanitizer.CheckImapFolderName(folder);
+        if (folderError is not null) return folderError;
 
         return await ExecuteImapAsync(async (reader, writer, cancellation) =>
         {
@@ -161,6 +165,9 @@ public sealed class InboxZeroTool : ITool, IDisposable
     {
         var folder = args.TryGetProperty("folder", out var f) ? f.GetString() ?? "INBOX" : "INBOX";
         var count = GetCount(args);
+        folder = InputSanitizer.StripCrlf(folder);
+        var folderError = InputSanitizer.CheckImapFolderName(folder);
+        if (folderError is not null) return folderError;
 
         return await ExecuteImapAsync(async (reader, writer, cancellation) =>
         {
@@ -233,6 +240,9 @@ public sealed class InboxZeroTool : ITool, IDisposable
 
         var folder = args.TryGetProperty("folder", out var f) ? f.GetString() ?? "INBOX" : "INBOX";
         var count = GetCount(args);
+        folder = InputSanitizer.StripCrlf(folder);
+        var folderError = InputSanitizer.CheckImapFolderName(folder);
+        if (folderError is not null) return folderError;
 
         return await ExecuteImapAsync(async (reader, writer, cancellation) =>
         {
@@ -302,7 +312,7 @@ public sealed class InboxZeroTool : ITool, IDisposable
             {
                 try
                 {
-                    await writer.WriteLineAsync($"A_LIST LIST \"\" \"{candidate}\"".AsMemory(), cancellation);
+                    await writer.WriteLineAsync($"A_LIST LIST \"\" {ImapQuote(candidate)}".AsMemory(), cancellation);
                     await writer.FlushAsync(cancellation);
                     var resp = await ReadUntilTagAsync(reader, "A_LIST", cancellation);
                     if (resp.Contains("* LIST", StringComparison.OrdinalIgnoreCase))
@@ -472,32 +482,42 @@ public sealed class InboxZeroTool : ITool, IDisposable
 
         try
         {
+            using var timeoutCts = _config.ImapOperationTimeoutSeconds > 0
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            if (timeoutCts is not null)
+            {
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(_config.ImapOperationTimeoutSeconds));
+            }
+            var effectiveCt = timeoutCts?.Token ?? ct;
+
             using var client = new System.Net.Sockets.TcpClient();
-            await client.ConnectAsync(_emailConfig.ImapHost, _emailConfig.ImapPort, ct);
+            await client.ConnectAsync(_emailConfig.ImapHost, _emailConfig.ImapPort, effectiveCt);
 
             System.IO.Stream stream = client.GetStream();
             var sslStream = new System.Net.Security.SslStream(stream, false);
-            await sslStream.AuthenticateAsClientAsync(_emailConfig.ImapHost);
+            await sslStream.AuthenticateAsClientAsync(_emailConfig.ImapHost).WaitAsync(effectiveCt);
             stream = sslStream;
 
             using var reader = new StreamReader(stream, Encoding.UTF8);
             using var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = false };
 
             // Read greeting
-            await reader.ReadLineAsync(ct);
+            await reader.ReadLineAsync(effectiveCt);
 
             // Login
-            await writer.WriteLineAsync($"A1 LOGIN {_emailConfig.Username} {password}".AsMemory(), ct);
-            await writer.FlushAsync(ct);
-            var loginResp = await ReadUntilTagAsync(reader, "A1", ct);
+            await writer.WriteLineAsync($"A1 LOGIN {ImapQuote(_emailConfig.Username!)} {ImapQuote(password)}".AsMemory(), effectiveCt);
+            await writer.FlushAsync(effectiveCt);
+            var loginResp = await ReadUntilTagAsync(reader, "A1", effectiveCt);
             if (!loginResp.Contains("OK", StringComparison.OrdinalIgnoreCase))
                 return $"Error: IMAP login failed — {loginResp}";
 
-            var result = await action(reader, writer, ct);
+            var result = await action(reader, writer, effectiveCt);
 
             // Logout
-            await writer.WriteLineAsync("A99 LOGOUT".AsMemory(), ct);
-            await writer.FlushAsync(ct);
+            await writer.WriteLineAsync("A99 LOGOUT".AsMemory(), effectiveCt);
+            await writer.FlushAsync(effectiveCt);
+            _ = await ReadUntilTagAsync(reader, "A99", effectiveCt);
 
             return result;
         }
@@ -507,23 +527,27 @@ public sealed class InboxZeroTool : ITool, IDisposable
         }
     }
 
-    private static async Task ImapSelectAsync(StreamWriter writer, StreamReader reader, string folder, CancellationToken ct)
+    private async Task ImapSelectAsync(StreamWriter writer, StreamReader reader, string folder, CancellationToken ct)
     {
-        folder = InputSanitizer.StripCrlf(folder);
-        await writer.WriteLineAsync($"A2 SELECT \"{folder}\"".AsMemory(), ct);
+        await writer.WriteLineAsync($"A2 SELECT {ImapQuote(folder)}".AsMemory(), ct);
         await writer.FlushAsync(ct);
         await ReadUntilTagAsync(reader, "A2", ct);
     }
 
-    private static async Task<int> ImapGetMessageCountAsync(StreamWriter writer, StreamReader reader, string folder, CancellationToken ct)
+    private async Task<int> ImapGetMessageCountAsync(StreamWriter writer, StreamReader reader, string folder, CancellationToken ct)
     {
-        await writer.WriteLineAsync($"A3 STATUS \"{folder}\" (MESSAGES)".AsMemory(), ct);
+        await writer.WriteLineAsync($"A3 STATUS {ImapQuote(folder)} (MESSAGES)".AsMemory(), ct);
         await writer.FlushAsync(ct);
 
         var count = 0;
         string? line;
+        var lines = 0;
         while ((line = await reader.ReadLineAsync(ct)) is not null)
         {
+            lines++;
+            if (lines > MaxImapResponseLines)
+                throw new InvalidOperationException($"IMAP STATUS response exceeded maximum lines ({MaxImapResponseLines}).");
+
             if (line.Contains("MESSAGES", StringComparison.OrdinalIgnoreCase))
             {
                 var idx = line.IndexOf("MESSAGES", StringComparison.OrdinalIgnoreCase);
@@ -539,7 +563,7 @@ public sealed class InboxZeroTool : ITool, IDisposable
         return count;
     }
 
-    private static async Task<EmailHeaders> ImapFetchHeadersExtendedAsync(
+    private async Task<EmailHeaders> ImapFetchHeadersExtendedAsync(
         StreamWriter writer, StreamReader reader, int msgNum, CancellationToken ct)
     {
         await writer.WriteLineAsync(
@@ -550,8 +574,13 @@ public sealed class InboxZeroTool : ITool, IDisposable
         var hasListUnsub = false;
         var sb = new StringBuilder();
         string? line;
+        var lines = 0;
         while ((line = await reader.ReadLineAsync(ct)) is not null)
         {
+            lines++;
+            if (lines > MaxImapResponseLines)
+                throw new InvalidOperationException($"IMAP FETCH response exceeded maximum lines ({MaxImapResponseLines}).");
+
             sb.AppendLine(line);
             if (line.StartsWith("A5 ", StringComparison.Ordinal)) break;
         }
@@ -573,7 +602,7 @@ public sealed class InboxZeroTool : ITool, IDisposable
         return new EmailHeaders(subject, from, date, hasListUnsub);
     }
 
-    private static async Task ImapStoreFlag(StreamWriter writer, StreamReader reader, int msgNum, string flag, CancellationToken ct)
+    private async Task ImapStoreFlag(StreamWriter writer, StreamReader reader, int msgNum, string flag, CancellationToken ct)
     {
         var tag = $"AS{msgNum}";
         await writer.WriteLineAsync($"{tag} STORE {msgNum} +FLAGS ({flag})".AsMemory(), ct);
@@ -581,12 +610,12 @@ public sealed class InboxZeroTool : ITool, IDisposable
         await ReadUntilTagAsync(reader, tag, ct);
     }
 
-    private static async Task ImapMoveToArchive(StreamWriter writer, StreamReader reader, int msgNum, CancellationToken ct)
+    private async Task ImapMoveToArchive(StreamWriter writer, StreamReader reader, int msgNum, CancellationToken ct)
     {
         // Try MOVE command first (RFC 6851), fall back to COPY+DELETE
         var tag = $"AM{msgNum}";
         // Most providers support "[Gmail]/All Mail" or "Archive"
-        await writer.WriteLineAsync($"{tag} COPY {msgNum} \"Archive\"".AsMemory(), ct);
+        await writer.WriteLineAsync($"{tag} COPY {msgNum} {ImapQuote("Archive")}".AsMemory(), ct);
         await writer.FlushAsync(ct);
         var resp = await ReadUntilTagAsync(reader, tag, ct);
 
@@ -594,7 +623,7 @@ public sealed class InboxZeroTool : ITool, IDisposable
         {
             // Try Gmail-style archive
             var tag2 = $"AM2{msgNum}";
-            await writer.WriteLineAsync($"{tag2} COPY {msgNum} \"[Gmail]/All Mail\"".AsMemory(), ct);
+            await writer.WriteLineAsync($"{tag2} COPY {msgNum} {ImapQuote("[Gmail]/All Mail")}".AsMemory(), ct);
             await writer.FlushAsync(ct);
             await ReadUntilTagAsync(reader, tag2, ct);
         }
@@ -603,25 +632,33 @@ public sealed class InboxZeroTool : ITool, IDisposable
         await ImapStoreFlag(writer, reader, msgNum, "\\Deleted", ct);
     }
 
-    private static async Task ImapCopyToInbox(StreamWriter writer, StreamReader reader, int msgNum, CancellationToken ct)
+    private async Task ImapCopyToInbox(StreamWriter writer, StreamReader reader, int msgNum, CancellationToken ct)
     {
         var tag = $"AC{msgNum}";
-        await writer.WriteLineAsync($"{tag} COPY {msgNum} \"INBOX\"".AsMemory(), ct);
+        await writer.WriteLineAsync($"{tag} COPY {msgNum} {ImapQuote("INBOX")}".AsMemory(), ct);
         await writer.FlushAsync(ct);
         await ReadUntilTagAsync(reader, tag, ct);
     }
 
-    private static async Task<string> ReadUntilTagAsync(StreamReader reader, string tag, CancellationToken ct)
+    private async Task<string> ReadUntilTagAsync(StreamReader reader, string tag, CancellationToken ct)
     {
         var sb = new StringBuilder();
         string? line;
+        var lines = 0;
         while ((line = await reader.ReadLineAsync(ct)) is not null)
         {
+            lines++;
+            if (lines > MaxImapResponseLines)
+                throw new InvalidOperationException($"IMAP response exceeded maximum lines ({MaxImapResponseLines}) for tag {tag}.");
+
             sb.AppendLine(line);
             if (line.StartsWith($"{tag} ", StringComparison.Ordinal)) break;
         }
         return sb.ToString();
     }
+
+    private static string ImapQuote(string value)
+        => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
     public void Dispose() { }
 }

@@ -11,6 +11,7 @@ public sealed class GatewayWebSocketClient : IAsyncDisposable
 
     private readonly int _maxMessageBytes;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly object _stateLock = new();
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _rxCts;
     private Task? _rxLoop;
@@ -20,7 +21,16 @@ public sealed class GatewayWebSocketClient : IAsyncDisposable
         _maxMessageBytes = maxMessageBytes;
     }
 
-    public bool IsConnected => _ws?.State == WebSocketState.Open;
+    public bool IsConnected
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _ws?.State == WebSocketState.Open;
+            }
+        }
+    }
 
     public event Action<string>? OnTextMessage;
     public event Action<string>? OnError;
@@ -35,34 +45,51 @@ public sealed class GatewayWebSocketClient : IAsyncDisposable
 
         await ws.ConnectAsync(wsUri, ct);
 
-        _ws = ws;
-        _rxCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _rxLoop = Task.Run(() => ReceiveLoopAsync(ws, _rxCts.Token), _rxCts.Token);
+        var rxCts = new CancellationTokenSource();
+        var rxLoop = Task.Run(() => ReceiveLoopAsync(ws, rxCts.Token), rxCts.Token);
+
+        lock (_stateLock)
+        {
+            _ws = ws;
+            _rxCts = rxCts;
+            _rxLoop = rxLoop;
+        }
     }
 
     public async Task DisconnectAsync(CancellationToken ct)
     {
-        var ws = _ws;
-        _ws = null;
+        ClientWebSocket? ws;
+        CancellationTokenSource? rxCts;
+        Task? rxLoop;
+
+        lock (_stateLock)
+        {
+            ws = _ws;
+            rxCts = _rxCts;
+            rxLoop = _rxLoop;
+            _ws = null;
+            _rxCts = null;
+            _rxLoop = null;
+        }
 
         try
         {
-            if (_rxCts is not null)
-            {
-                await _rxCts.CancelAsync();
-                _rxCts.Dispose();
-                _rxCts = null;
-            }
+            if (rxCts is not null)
+                await rxCts.CancelAsync();
         }
         catch
         {
             // Best-effort.
         }
 
-        if (_rxLoop is not null)
+        if (rxLoop is not null)
         {
-            try { await _rxLoop.WaitAsync(TimeSpan.FromSeconds(2), ct); } catch { /* ignore */ }
-            _rxLoop = null;
+            try { await rxLoop.WaitAsync(TimeSpan.FromSeconds(2), ct); } catch { /* ignore */ }
+        }
+
+        if (rxCts is not null)
+        {
+            try { rxCts.Dispose(); } catch { /* ignore */ }
         }
 
         if (ws is null)
@@ -85,7 +112,12 @@ public sealed class GatewayWebSocketClient : IAsyncDisposable
 
     public async Task SendUserMessageAsync(string text, string? messageId, string? replyToMessageId, CancellationToken ct)
     {
-        var ws = _ws;
+        ClientWebSocket? ws;
+        lock (_stateLock)
+        {
+            ws = _ws;
+        }
+
         if (ws is null || ws.State != WebSocketState.Open)
             throw new InvalidOperationException("WebSocket is not connected.");
 

@@ -20,6 +20,7 @@ public sealed class BrowserTool : ITool, IAsyncDisposable
     private IPage? _page;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _initialized;
+    private bool _disposed;
 
     public BrowserTool(ToolingConfig config)
     {
@@ -50,19 +51,24 @@ public sealed class BrowserTool : ITool, IAsyncDisposable
         }
         """;
 
-    private async Task EnsureInitializedAsync()
+    private async Task EnsureInitializedAsync(CancellationToken ct)
     {
         if (_initialized) return;
         
-        await _lock.WaitAsync();
+        await _lock.WaitAsync(ct);
         try
         {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(BrowserTool));
+
             if (_initialized) return;
 
             // Ensure Chromium is installed locally before proceeding
-            var exitCode = Microsoft.Playwright.Program.Main(["install", "chromium"]);
+            var exitCode = await Task.Run(() => Microsoft.Playwright.Program.Main(["install", "chromium"]), ct);
             if (exitCode != 0)
                 throw new InvalidOperationException($"Playwright CLI install failed with exit code {exitCode}");
+
+            ct.ThrowIfCancellationRequested();
 
             _playwright = await Playwright.CreateAsync();
             _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
@@ -83,28 +89,44 @@ public sealed class BrowserTool : ITool, IAsyncDisposable
     public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
     {
         // Setup playwright lazily
-        await EnsureInitializedAsync();
-        
-        if (_page is null) return "Error: Browser not initialized.";
-        
-        using var args = JsonDocument.Parse(argumentsJson);
-        var action = args.RootElement.GetProperty("action").GetString();
-        
+        await EnsureInitializedAsync(ct);
+
+        await _lock.WaitAsync(ct);
         try
         {
+            if (_disposed)
+                return "Error: Browser tool is disposed.";
+
+            if (_page is null)
+                return "Error: Browser not initialized.";
+
+            using var args = JsonDocument.Parse(argumentsJson);
+            var action = args.RootElement.GetProperty("action").GetString();
+
+            using var cancellationRegistration = ct.Register(() =>
+            {
+                var page = _page;
+                if (page is not null)
+                {
+                    var ignoredTask = ClosePageBestEffortAsync(page);
+                }
+            });
+
             switch (action)
             {
                 case "goto":
                 {
                     var url = args.RootElement.GetProperty("url").GetString()!;
-                    await _page.GotoAsync(url, new PageGotoOptions { WaitUntil = WaitUntilState.Load });
-                    return $"Navigated to {url}. Title: '{await _page.TitleAsync()}'";
+                    await WithCancellationAsync(
+                        _page.GotoAsync(url, new PageGotoOptions { WaitUntil = WaitUntilState.Load }), ct);
+                    var title = await WithCancellationAsync(_page.TitleAsync(), ct);
+                    return $"Navigated to {url}. Title: '{title}'";
                 }
 
                 case "click":
                 {
                     var cSelector = args.RootElement.GetProperty("selector").GetString()!;
-                    await _page.ClickAsync(cSelector);
+                    await WithCancellationAsync(_page.ClickAsync(cSelector), ct);
                     return $"Clicked selector: {cSelector}";
                 }
 
@@ -112,7 +134,7 @@ public sealed class BrowserTool : ITool, IAsyncDisposable
                 {
                     var fSelector = args.RootElement.GetProperty("selector").GetString()!;
                     var value = args.RootElement.GetProperty("value").GetString()!;
-                    await _page.FillAsync(fSelector, value);
+                    await WithCancellationAsync(_page.FillAsync(fSelector, value), ct);
                     return $"Filled {fSelector} with provided value.";
                 }
 
@@ -120,25 +142,29 @@ public sealed class BrowserTool : ITool, IAsyncDisposable
                 {
                     if (args.RootElement.TryGetProperty("selector", out var textSel) && !string.IsNullOrWhiteSpace(textSel.GetString()))
                     {
-                        var content = await _page.TextContentAsync(textSel.GetString()!);
+                        var content = await WithCancellationAsync(_page.TextContentAsync(textSel.GetString()!), ct);
                         return content ?? "No text found for selector.";
                     }
                     
-                    var body = await _page.TextContentAsync("body");
+                    var body = await WithCancellationAsync(_page.TextContentAsync("body"), ct);
                     return body ?? "Body is empty.";
                 }
 
                 case "evaluate":
                 {
+                    if (!_config.AllowBrowserEvaluate)
+                        return "Error: Browser evaluate is disabled by configuration (Tooling.AllowBrowserEvaluate=false).";
+
                     var script = args.RootElement.GetProperty("script").GetString()!;
                     // Run script and serialize string
-                    var resultElement = await _page.EvaluateAsync<JsonElement>(script);
+                    var resultElement = await WithCancellationAsync(_page.EvaluateAsync<JsonElement>(script), ct);
                     return resultElement.ToString();
                 }
 
                 case "screenshot":
                 {
-                    var bytes = await _page.ScreenshotAsync(new PageScreenshotOptions { FullPage = true });
+                    var bytes = await WithCancellationAsync(
+                        _page.ScreenshotAsync(new PageScreenshotOptions { FullPage = true }), ct);
                     return $"Screenshot taken. Base64: {Convert.ToBase64String(bytes)}";
                 }
 
@@ -146,17 +172,74 @@ public sealed class BrowserTool : ITool, IAsyncDisposable
                     return $"Error: Unknown action '{action}'";
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return "Browser action cancelled.";
+        }
         catch (Exception ex)
         {
-            return $"Browser action '{action}' failed: {ex.Message}";
+            return $"Browser action failed: {ex.Message}";
+        }
+        finally
+        {
+            _lock.Release();
         }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_page != null) await _page.CloseAsync();
-        if (_browser != null) await _browser.CloseAsync();
-        _playwright?.Dispose();
-        _lock.Dispose();
+        await _lock.WaitAsync();
+        try
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+
+            if (_page != null)
+                await _page.CloseAsync();
+            if (_browser != null)
+                await _browser.CloseAsync();
+
+            _playwright?.Dispose();
+            _page = null;
+            _browser = null;
+            _playwright = null;
+            _initialized = false;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    private static async Task ClosePageBestEffortAsync(IPage page)
+    {
+        try { await page.CloseAsync(); } catch { }
+    }
+
+    private static async Task WithCancellationAsync(Task task, CancellationToken ct)
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var reg = ct.Register(() => gate.TrySetResult());
+
+        if (task == await Task.WhenAny(task, gate.Task))
+        {
+            await task;
+            return;
+        }
+
+        throw new OperationCanceledException(ct);
+    }
+
+    private static async Task<T> WithCancellationAsync<T>(Task<T> task, CancellationToken ct)
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var reg = ct.Register(() => gate.TrySetResult());
+
+        if (task == await Task.WhenAny(task, gate.Task))
+            return await task;
+
+        throw new OperationCanceledException(ct);
     }
 }

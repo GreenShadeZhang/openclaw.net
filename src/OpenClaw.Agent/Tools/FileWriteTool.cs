@@ -18,6 +18,9 @@ public sealed class FileWriteTool : ITool
 
     public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
     {
+        if (_config.ReadOnlyMode)
+            return "Error: write_file is disabled because Tooling.ReadOnlyMode is enabled.";
+
         using var args = System.Text.Json.JsonDocument.Parse(argumentsJson);
         if (!args.RootElement.TryGetProperty("path", out var pathEl) || pathEl.ValueKind != System.Text.Json.JsonValueKind.String)
             return "Error: 'path' is required.";
@@ -28,19 +31,20 @@ public sealed class FileWriteTool : ITool
         if (!args.RootElement.TryGetProperty("content", out var contentEl) || contentEl.ValueKind != System.Text.Json.JsonValueKind.String)
             return "Error: 'content' is required.";
         var content = contentEl.GetString() ?? "";
+        var resolvedPath = ToolPathPolicy.ResolveRealPath(path);
 
-        if (!ToolPathPolicy.IsWriteAllowed(_config, path))
+        if (!ToolPathPolicy.IsWriteAllowed(_config, resolvedPath))
             return $"Error: Write access denied for path: {path}";
 
-        var dir = Path.GetDirectoryName(path);
+        var dir = Path.GetDirectoryName(resolvedPath);
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        var tmp = path + ".tmp";
+        var tmp = resolvedPath + ".tmp";
         try
         {
             await File.WriteAllTextAsync(tmp, content, ct);
-            File.Move(tmp, path, overwrite: true);
+            File.Move(tmp, resolvedPath, overwrite: true);
         }
         catch
         {

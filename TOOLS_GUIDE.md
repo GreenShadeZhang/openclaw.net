@@ -182,6 +182,120 @@ Common approval list (example): `["shell","write_file","home_assistant_write","m
 - `supervised` (default): enables tool approvals by default and prompts for approval on write-capable tools.
 - `full`: no approval prompts by default (still respects allowlists/policies/forbidden paths).
 
+### Hardening Setups (progressive, not rigid)
+Defaults in OpenClaw.NET intentionally favor compatibility (`ReadOnlyMode=false`, approvals optional).
+Use these profiles to harden in stages:
+
+1. **Compatibility-first (default-like)**
+   - Keep existing behavior, then tighten targeted policies.
+   - Suggested knobs:
+     - `OpenClaw:Tooling:ReadOnlyMode=false`
+     - `OpenClaw:Tooling:RequireToolApproval=false`
+     - Restrict plugin write scopes with provider-specific allow/deny globs.
+
+2. **Supervised operations (recommended for most teams)**
+   - Keep writes available, but require approval for mutating tools.
+   - Suggested knobs:
+     - `OpenClaw:Tooling:ReadOnlyMode=false`
+     - `OpenClaw:Tooling:RequireToolApproval=true`
+     - `OpenClaw:Tooling:ApprovalRequiredTools=["shell","write_file","code_exec","database","email","home_assistant_write","mqtt_publish"]`
+     - Optional: `OpenClaw:Security:RequireRequesterMatchForHttpToolApproval=true`
+
+3. **Read-only lockdown (incident response / audit mode)**
+   - Disable all mutating tool actions globally while preserving read/analysis capabilities.
+   - Suggested knobs:
+     - `OpenClaw:Tooling:ReadOnlyMode=true`
+     - Keep `RequireToolApproval=true` for defense in depth on any remaining risky tools.
+
+When `ReadOnlyMode=true`, OpenClaw denies write-capable actions for:
+- core tools: `shell`, `write_file`
+- native plugin tools: `code_exec`, `database` (`execute` action), `email` (`send` action), `home_assistant_write`, `mqtt_publish`
+
+This model lets you start permissive and progressively harden without breaking existing deployments by default.
+
+### Copy/Paste Hardening Profiles
+These snippets are intentionally minimal. Merge into `OpenClaw` settings and adjust per environment.
+
+#### Dev (fast iteration, low friction)
+```json
+{
+  "OpenClaw": {
+    "Tooling": {
+      "ReadOnlyMode": false,
+      "RequireToolApproval": false,
+      "AllowShell": true,
+      "WorkspaceOnly": false,
+      "AllowedReadRoots": ["*"],
+      "AllowedWriteRoots": ["*"],
+      "ApprovalRequiredTools": ["shell", "write_file"]
+    }
+  }
+}
+```
+
+#### Staging (supervised, production-like)
+```json
+{
+  "OpenClaw": {
+    "Security": {
+      "RequireRequesterMatchForHttpToolApproval": true
+    },
+    "Tooling": {
+      "ReadOnlyMode": false,
+      "RequireToolApproval": true,
+      "AllowShell": true,
+      "WorkspaceOnly": true,
+      "WorkspaceRoot": "env:OPENCLAW_WORKSPACE",
+      "AllowedReadRoots": ["/app/workspace"],
+      "AllowedWriteRoots": ["/app/workspace"],
+      "ApprovalRequiredTools": [
+        "shell",
+        "write_file",
+        "code_exec",
+        "database",
+        "email",
+        "home_assistant_write",
+        "mqtt_publish"
+      ]
+    }
+  }
+}
+```
+
+#### Prod (read-only lockdown baseline)
+```json
+{
+  "OpenClaw": {
+    "Security": {
+      "RequireRequesterMatchForHttpToolApproval": true
+    },
+    "Tooling": {
+      "ReadOnlyMode": true,
+      "RequireToolApproval": true,
+      "AllowShell": false,
+      "WorkspaceOnly": true,
+      "WorkspaceRoot": "env:OPENCLAW_WORKSPACE",
+      "AllowedReadRoots": ["/app/workspace"],
+      "AllowedWriteRoots": ["/app/workspace"],
+      "ApprovalRequiredTools": [
+        "shell",
+        "write_file",
+        "code_exec",
+        "database",
+        "email",
+        "home_assistant_write",
+        "mqtt_publish"
+      ]
+    }
+  }
+}
+```
+
+Notes:
+- `ReadOnlyMode=true` blocks mutating tool actions but still allows read/analysis operations.
+- Start with staging profile in non-prod to discover legitimate write workflows before enforcing prod lockdown.
+- Keep secrets as `env:` references instead of inline values.
+
 Helpful knobs:
 - `WorkspaceOnly` + `WorkspaceRoot` (workspace-only file access)
 - `AllowedShellCommandGlobs` (shell allowlist)
@@ -190,9 +304,10 @@ Helpful knobs:
 ### Tool Approvals (Supervised Mode)
 When a tool requires approval, the gateway emits a `tool_approval_required` event to WebSocket envelope clients.
 - WebChat supports approvals via a confirmation dialog.
+- On non-loopback/public binds, approval decisions are tied to the original requester (`channelId` + `senderId`).
 - Fallbacks:
   - Reply in chat: `/approve <approvalId> yes|no`
-  - HTTP: `POST /tools/approve?approvalId=...&approved=true|false` (Bearer-protected on non-loopback binds)
+  - HTTP: `POST /tools/approve?approvalId=...&approved=true|false` (admin override; Bearer-protected on non-loopback binds)
 
 ### Strict Allowlists + Onboarding Helpers
 To make allowlists consistent across channels, set:

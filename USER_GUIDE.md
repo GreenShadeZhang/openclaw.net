@@ -121,6 +121,22 @@ Skill locations (precedence order):
 3. Bundled: `skills/<skill>/SKILL.md` (shipped with the gateway)
 4. Extra dirs: `OpenClaw:Skills:Load:ExtraDirs`
 
+### Installing skills from ClawHub
+
+OpenClaw.NET skill folders are compatible with the upstream OpenClaw skill format (a folder containing `SKILL.md`).
+
+Prerequisite: install the ClawHub CLI:
+- `npm i -g clawhub` (or `pnpm add -g clawhub`)
+
+Install into your workspace skills (recommended):
+- Ensure `OPENCLAW_WORKSPACE` is set
+- `openclaw clawhub install <skill-slug>`
+
+Install into managed skills (shared across workspaces):
+- `openclaw clawhub --managed install <skill-slug>`
+
+Note: start a new Gateway session (or restart the Gateway) to pick up newly installed skills.
+
 This repo ships a bundled set of powerful personas and capabilities out-of-the-box (Software Developer, Deep Researcher, Data Analyst, daily news digest, email triage, Home Assistant + MQTT operations). You can disable any skill via:
 ```json
 {
@@ -147,8 +163,27 @@ The easiest way to interact with OpenClaw locally is via the embedded frontend:
 WebChat token details:
 - The browser client authenticates WebSocket using `?token=<value>` on the `/ws` URL.
 - For non-loopback/public binds, enable `OpenClaw:Security:AllowQueryStringToken=true` if you use the built-in WebChat.
-- Entered token values are stored as `openclaw_token` in browser `localStorage`.
+- Tokens are stored in `sessionStorage` by default.
+- Enable the **Remember** checkbox to also store `openclaw_token` in `localStorage`.
 WebChat includes a **Doctor** button which fetches `GET /doctor/text` and prints a diagnostics report (helpful for onboarding and debugging).
+
+### Memory Retention Sweeper (Sessions + Branches)
+Retention is opt-in and targets persisted sessions/branches only (not notes).
+
+Key defaults:
+- `OpenClaw:Memory:Retention:Enabled=false`
+- `SessionTtlDays=30`
+- `BranchTtlDays=14`
+- `ArchiveEnabled=true` with archive-before-delete
+- `ArchiveRetentionDays=30`
+
+Recommended enablement flow:
+1. Configure retention in `appsettings.json` under `OpenClaw:Memory:Retention`.
+2. Run a dry-run first: `POST /memory/retention/sweep?dryRun=true`
+3. Inspect status: `GET /memory/retention/status`
+4. Validate `/doctor/text` warnings and retained-count trends after enabling.
+
+The runtime also performs proactive in-memory active-session expiry sweeps, so expired sessions are evicted over time even without max-capacity pressure.
 
 ### Avalonia Desktop Companion
 You can also interact via the C# desktop interface:
@@ -192,6 +227,7 @@ Once you’ve verified the right senders, you can tighten allowlists:
 ### Tool Approvals (Supervised Mode)
 If `OpenClaw:Tooling:AutonomyMode="supervised"`, the gateway will request approval before running write-capable tools (shell, write_file, etc.).
 - WebChat prompts via a confirmation dialog.
+- On non-loopback/public binds, `/approve` decisions are bound to the same channel+sender that received the approval request.
 - Fallbacks:
   - Reply: `/approve <approvalId> yes|no`
   - Admin API: `POST /tools/approve?approvalId=...&approved=true|false`
@@ -203,6 +239,11 @@ Webhook request size controls:
 - `OpenClaw:Webhooks:Endpoints:<name>:MaxRequestBytes` (default `131072`)
 
 For custom `/webhooks/{name}` routes, `MaxBodyLength` still controls prompt truncation after size validation.
+If `ValidateHmac=true`, `Secret` is mandatory and validated at startup.
+
+Compaction note:
+- History compaction remains off by default.
+- If you enable `OpenClaw:Memory:EnableCompaction=true`, `CompactionThreshold` must be greater than `MaxHistoryTurns`.
 
 ---
 
@@ -220,10 +261,14 @@ OpenClaw.NET supports WhatsApp via two methods: the **Official Meta Cloud API** 
 "WhatsApp": {
   "Enabled": true,
   "Type": "official",
+  "ValidateSignature": true,
+  "WebhookAppSecretRef": "env:WHATSAPP_APP_SECRET",
   "PhoneNumberId": "YOUR_PHONE_ID",
   "CloudApiTokenRef": "env:WHATSAPP_CLOUD_API_TOKEN"
 }
 ```
+
+For non-loopback/public binds, official mode requires `ValidateSignature=true` and a valid app secret.
 
 ### 2. WhatsApp Bridge
 If you are using a proxy that handles the WhatsApp protocol (like a `whatsmeow` wrapper), use the bridge mode.
@@ -236,6 +281,9 @@ If you are using a proxy that handles the WhatsApp protocol (like a `whatsmeow` 
   "BridgeTokenRef": "env:WHATSAPP_BRIDGE_TOKEN"
 }
 ```
+
+Bridge mode validates inbound webhook auth using `Authorization: Bearer <BridgeToken>` or `X-Bridge-Token`.
+For non-loopback/public binds, `BridgeTokenRef`/`BridgeToken` is required.
 
 ---
 

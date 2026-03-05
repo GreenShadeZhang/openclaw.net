@@ -695,6 +695,40 @@ public class DatabaseToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_QueryAction_BlocksWritesHiddenByLeadingComment()
+    {
+        var tool = new DatabaseTool(new DatabaseConfig
+        {
+            Enabled = true,
+            ConnectionString = "raw:Data Source=:memory:",
+            AllowWrite = true
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"action":"query","sql":"/*comment*/\nINSERT INTO users(id) VALUES (1)"}""",
+            CancellationToken.None);
+
+        Assert.Contains("Write operations must use the 'execute' action", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_QueryAction_BlocksWritesInsideWithCte()
+    {
+        var tool = new DatabaseTool(new DatabaseConfig
+        {
+            Enabled = true,
+            ConnectionString = "raw:Data Source=:memory:",
+            AllowWrite = true
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"action":"query","sql":"WITH x AS (UPDATE users SET role='admin' RETURNING id) SELECT id FROM x"}""",
+            CancellationToken.None);
+
+        Assert.Contains("Write operations must use the 'execute' action", result);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_UnsupportedAction_ReturnsError()
     {
         var tool = new DatabaseTool(new DatabaseConfig

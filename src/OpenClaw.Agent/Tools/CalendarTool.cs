@@ -316,7 +316,7 @@ public sealed class CalendarTool : ITool, IDisposable
         var signingInput = $"{headerB64}.{claimsB64}";
 
         // Sign with RSA
-        var rsa = System.Security.Cryptography.RSA.Create();
+        using var rsa = System.Security.Cryptography.RSA.Create();
         rsa.ImportFromPem(privateKeyPem);
         var signature = rsa.SignData(
             Encoding.UTF8.GetBytes(signingInput),

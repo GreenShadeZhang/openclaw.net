@@ -389,6 +389,22 @@ public sealed class DatabaseConfig
 
     /// <summary>Maximum rows to return.</summary>
     public int MaxRows { get; set; } = 1000;
+
+    /// <summary>
+    /// Allowed table names (schema-qualified optional). Empty = allow all tables.
+    /// </summary>
+    public string[] AllowedTables { get; set; } = [];
+
+    /// <summary>
+    /// Denied table names (schema-qualified optional). Deny wins over allow.
+    /// </summary>
+    public string[] DeniedTables { get; set; } = [];
+
+    /// <summary>
+    /// Whether SQL containing multiple statements is allowed.
+    /// Default false to reduce accidental/destructive multi-statement execution.
+    /// </summary>
+    public bool AllowMultiStatement { get; set; } = false;
 }
 
 public sealed class InboxZeroConfig
@@ -409,6 +425,18 @@ public sealed class InboxZeroConfig
 
     /// <summary>When true, report what would happen without actually moving/deleting anything.</summary>
     public bool DryRun { get; set; } = true;
+
+    /// <summary>
+    /// Optional IMAP operation timeout in seconds.
+    /// 0 disables this additional timeout and relies on the caller/tool timeout.
+    /// </summary>
+    public int ImapOperationTimeoutSeconds { get; set; } = 0;
+
+    /// <summary>
+    /// Maximum number of IMAP response lines to read for a tagged command.
+    /// Prevents infinite loops on protocol desync.
+    /// </summary>
+    public int MaxResponseLinesPerCommand { get; set; } = 10_000;
 }
 
 public sealed class PluginLoadConfig

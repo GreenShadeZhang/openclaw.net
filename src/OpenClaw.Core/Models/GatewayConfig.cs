@@ -71,6 +71,7 @@ public sealed class MemoryConfig
 
     public MemorySqliteConfig Sqlite { get; set; } = new();
     public MemoryRecallConfig Recall { get; set; } = new();
+    public MemoryRetentionConfig Retention { get; set; } = new();
 
     /// <summary>When true, old history turns are summarized by the LLM instead of dropped.</summary>
     public bool EnableCompaction { get; set; } = false;
@@ -83,6 +84,19 @@ public sealed class MemoryConfig
 
     /// <summary>Identifier for project-level memory scoping. Defaults to OPENCLAW_PROJECT env var.</summary>
     public string? ProjectId { get; set; }
+}
+
+public sealed class MemoryRetentionConfig
+{
+    public bool Enabled { get; set; } = false;
+    public bool RunOnStartup { get; set; } = true;
+    public int SweepIntervalMinutes { get; set; } = 30;
+    public int SessionTtlDays { get; set; } = 30;
+    public int BranchTtlDays { get; set; } = 14;
+    public bool ArchiveEnabled { get; set; } = true;
+    public string ArchivePath { get; set; } = "./memory/archive";
+    public int ArchiveRetentionDays { get; set; } = 30;
+    public int MaxItemsPerSweep { get; set; } = 1000;
 }
 
 public sealed class MemorySqliteConfig
@@ -105,6 +119,7 @@ public sealed class SecurityConfig
     public string[] AllowedOrigins { get; set; } = [];
     public bool TrustForwardedHeaders { get; set; } = false;
     public string[] KnownProxies { get; set; } = [];
+    public bool RequireRequesterMatchForHttpToolApproval { get; set; } = false;
 
     /// <summary>
     /// When binding to a non-loopback address, the gateway refuses to start if the local tooling
@@ -152,6 +167,7 @@ public sealed class ToolingConfig
     public string[] ForbiddenPathGlobs { get; set; } = [];
 
     public bool AllowShell { get; set; } = true;
+    public bool ReadOnlyMode { get; set; } = false;
     public string[] AllowedReadRoots { get; set; } = ["*"];
     public string[] AllowedWriteRoots { get; set; } = ["*"];
 
@@ -171,6 +187,7 @@ public sealed class ToolingConfig
     public int ToolApprovalTimeoutSeconds { get; set; } = 300;
 
     public bool EnableBrowserTool { get; set; } = true;
+    public bool AllowBrowserEvaluate { get; set; } = true;
     public bool BrowserHeadless { get; set; } = true;
     public int BrowserTimeoutSeconds { get; set; } = 30;
 }
@@ -193,6 +210,18 @@ public sealed class WhatsAppChannelConfig
     public string? WebhookPublicBaseUrl { get; set; }
     public string WebhookVerifyToken { get; set; } = "openclaw-verify";
     public string WebhookVerifyTokenRef { get; set; } = "env:WHATSAPP_VERIFY_TOKEN";
+
+    /// <summary>
+    /// When true, validates X-Hub-Signature-256 for official Cloud API webhooks.
+    /// Recommended for all non-loopback/public binds.
+    /// </summary>
+    public bool ValidateSignature { get; set; } = false;
+
+    /// <summary>Meta app secret used to validate official webhook signatures (direct value).</summary>
+    public string? WebhookAppSecret { get; set; }
+
+    /// <summary>Meta app secret reference (env: or raw:) used when WebhookAppSecret is null.</summary>
+    public string WebhookAppSecretRef { get; set; } = "env:WHATSAPP_APP_SECRET";
     
     // Official Cloud API settings
     public string? CloudApiToken { get; set; }
@@ -204,6 +233,7 @@ public sealed class WhatsAppChannelConfig
     public string? BridgeUrl { get; set; }
     public string? BridgeToken { get; set; }
     public string BridgeTokenRef { get; set; } = "env:WHATSAPP_BRIDGE_TOKEN";
+    public bool BridgeSuppressSendExceptions { get; set; } = false;
 
     public int MaxInboundChars { get; set; } = 4096;
 

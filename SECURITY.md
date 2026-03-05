@@ -23,6 +23,7 @@ We take security seriously. If you discover a security vulnerability in OpenClaw
 - **Sandbox escapes**: Reading/writing files outside allowed directories (`AllowedReadRoots`/`AllowedWriteRoots`).
 - **Remote Code Execution (RCE)**: Executing unauthorized code or commands (when `AllowShell=false` or beyond tool scope).
 - **Authentication bypass**: Accessing the gateway without a valid `OPENCLAW_AUTH_TOKEN` (on public binds).
+- **Approval hijacking**: Approving a pending tool action from a different sender/channel on public deployments.
 - **Data leakage**: Exposure of sensitive environment variables or file contents through unintended channels.
 - **Denial of Service (DoS)**: Crashing the gateway with malformed input (NativeAOT panic).
 
@@ -44,6 +45,11 @@ When running OpenClaw in production:
 5. **Monitor Logs**: Watch for `EventId=Security` warnings in structured logs.
 6. **Limit Roots**: Configure `AllowedReadRoots` and `AllowedWriteRoots` to specific subdirectories.
 7. **Set Budgets**: Use `SessionTokenBudget` to prevent runaway costs.
+8. **Sign Webhooks**: Keep Twilio/Telegram/WhatsApp signature checks enabled and set webhook HMAC secrets for `/webhooks/{name}` endpoints.
+9. **Avoid Query Tokens Publicly**: Prefer `Authorization: Bearer` and keep `AllowQueryStringToken=false` unless required by your client.
+10. **Plan Retention Storage**: If enabling `OpenClaw:Memory:Retention`, ensure `ArchivePath` has strict filesystem permissions and enough capacity.
+11. **Run Retention Dry-Run First**: Use `POST /memory/retention/sweep?dryRun=true` before enabling destructive sweeps in production.
+12. **Treat Archives as Sensitive Data**: Archive files are plaintext JSON payloads in this phase; encrypt at rest via host-level controls if required by policy.
 
 ## Tool Execution
 

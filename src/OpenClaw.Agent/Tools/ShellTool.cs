@@ -22,6 +22,9 @@ public sealed class ShellTool : ITool
 
     public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
     {
+        if (_config.ReadOnlyMode)
+            return "Error: shell is disabled because Tooling.ReadOnlyMode is enabled.";
+
         if (!_config.AllowShell)
             return "Error: Shell execution is disabled by configuration.";
 
@@ -101,25 +104,26 @@ public sealed class ShellTool : ITool
 
         while (true)
         {
-            var read = await stream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, Math.Max(1, remaining))), ct);
+            var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
             if (read == 0)
                 break;
+
+            if (remaining <= 0)
+            {
+                truncated = true;
+                continue;
+            }
 
             if (read > remaining)
             {
                 ms.Write(buffer, 0, remaining);
+                remaining = 0;
                 truncated = true;
-                break;
+                continue;
             }
 
             ms.Write(buffer, 0, read);
             remaining -= read;
-
-            if (remaining == 0)
-            {
-                truncated = true;
-                break;
-            }
         }
 
         return (ms.ToArray(), truncated);

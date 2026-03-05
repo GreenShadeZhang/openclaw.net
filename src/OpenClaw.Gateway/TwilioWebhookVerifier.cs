@@ -33,9 +33,6 @@ internal static class TwilioWebhookVerifier
         var expectedBytes = Encoding.UTF8.GetBytes(expected);
         var providedBytes = Encoding.UTF8.GetBytes(providedSignature.Trim());
 
-        if (expectedBytes.Length != providedBytes.Length)
-            return false;
-
         return CryptographicOperations.FixedTimeEquals(expectedBytes, providedBytes);
     }
 }
