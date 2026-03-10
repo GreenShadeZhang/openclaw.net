@@ -10,57 +10,117 @@
 
 Self-hosted OpenClaw.NET gateway + agent runtime in .NET (NativeAOT-friendly).
 
-## Architecture
-
-OpenClaw.NET uses a decoupled architecture to achieve NativeAOT performance while preserving practical compatibility with the upstream tool-plugin ecosystem through a Node.js bridge.
-
-```mermaid
-graph TD
-    Client[WebClient / WebSocket] <--> Gateway[C# OpenClaw Gateway]
-    Webhooks[WhatsApp / Telegram / Twilio] -->|HTTP Webhook| Gateway
-    
-    subgraph .NET Core [NativeAOT]
-        Gateway <--> Agent[Agent Runtime]
-        Agent <--> Tools[Native C# Tools]
-        Agent <--> Memory[(Memory Storage)]
-    end
-    
-    Agent <-->|JSON-RPC via stdin/out| Bridge(Node.js Plugin Bridge)
-    
-    subgraph JavaScript Ecosystem
-        Bridge <--> TSPlugins[OpenClaw TS/JS Plugins]
-    end
-    
-	    Agent <-->|REST API| LLM{LLM Provider}
-```
-
 ## Docs
 
+- [Quickstart Guide](QUICKSTART.md) — Fast local setup, runtime mode selection, and first usage flow.
 - [Tool Guide](TOOLS_GUIDE.md) — Detailed setup for all 18+ native tools.
 - [Hardening Profiles](TOOLS_GUIDE.md#copypaste-hardening-profiles) — Copy/paste dev/staging/prod security setups.
-- [User Guide](USER_GUIDE.md) — Core concepts and architecture.
+- [User Guide](USER_GUIDE.md) — Core concepts, providers, tools, skills, and channels.
+- [Startup Architecture Notes](docs/architecture-startup-refactor.md) — Current bootstrap/composition/profile/pipeline layout.
 - [Security Guide](SECURITY.md) — Mandatory reading for public deployments.
 - [Changelog](CHANGELOG.md) — Tracked project changes.
 - [Docker Hub Overview](DOCKERHUB.md) — Paste-ready README for `tellikoroma/openclaw.net`.
 
+## Architecture
+
+OpenClaw.NET now separates gateway startup and runtime composition into explicit layers instead of a single large startup path.
+
+Startup flow:
+
+1. `Bootstrap/`
+  - Loads config, resolves runtime mode, applies validation and hardening, and handles early exits such as `--doctor`.
+2. `Composition/` and `Profiles/`
+  - Registers services and applies the effective runtime lane: `aot` for trim-safe deployments or `jit` for expanded compatibility.
+3. `Pipeline/` and `Endpoints/`
+  - Wires middleware, channel startup, workers, shutdown handling, and the grouped HTTP/WebSocket surfaces.
+
+Runtime flow:
+
+- The Gateway handles HTTP, WebSocket, webhook, auth, policy, and observability concerns.
+- The Agent Runtime owns reasoning, tool execution, memory interaction, and skill loading.
+- Native tools run in-process.
+- Upstream-style plugins run through the Node.js bridge, with capability enforcement depending on the effective runtime lane.
+- Pure `SKILL.md` packages remain independent of the plugin bridge.
+
+```mermaid
+graph TD
+   Client[Web UI / CLI / Companion / WebSocket Client] <--> Gateway[Gateway]
+   Webhooks[Telegram / Twilio / WhatsApp / Generic Webhooks] --> Gateway
+
+   subgraph Startup
+      Bootstrap[Bootstrap]
+      Composition[Composition]
+      Profiles[Runtime Profiles]
+      Pipeline[Pipeline + Endpoints]
+      Bootstrap --> Composition --> Profiles --> Pipeline
+   end
+
+   subgraph Runtime
+      Gateway <--> Agent[Agent Runtime]
+      Agent <--> Tools[Native Tools]
+      Agent <--> Memory[(Memory + Sessions)]
+      Agent <-->|Provider API| LLM{LLM Provider}
+      Agent <-->|Bridge transport| Bridge[Node.js Plugin Bridge]
+      Bridge <--> JSPlugins[TS / JS Plugins]
+   end
+```
+
+Runtime lanes:
+
+- `OpenClaw:Runtime:Mode="aot"` keeps the trim-safe, low-memory lane.
+- `OpenClaw:Runtime:Mode="jit"` enables expanded bridge surfaces and native dynamic plugins.
+- `OpenClaw:Runtime:Mode="auto"` selects `jit` when dynamic code is available and `aot` otherwise.
+
+For the full startup-module breakdown, see [docs/architecture-startup-refactor.md](docs/architecture-startup-refactor.md).
+
 ## Quickstart (local)
 
+See [QUICKSTART.md](QUICKSTART.md) for the fastest path from zero to a running gateway.
+
+The shortest local path is:
+
 1. Set your API key:
-   - `export MODEL_PROVIDER_KEY="..."`
-   - *For advanced LLM provider setup (Ollama, Anthropic, Azure) see the [User Guide](USER_GUIDE.md).*
+  - `export MODEL_PROVIDER_KEY="..."`
+  - Optional workspace: `export OPENCLAW_WORKSPACE="$PWD/workspace"`
+  - Optional runtime selection: `export OpenClaw__Runtime__Mode="jit"`
 2. Run the gateway:
-   - `dotnet run --project src/OpenClaw.Gateway -c Release`
-   - Optional config file: `dotnet run --project src/OpenClaw.Gateway -c Release -- --config ~/.openclaw/config.json`
-   - Doctor mode: `dotnet run --project src/OpenClaw.Gateway -c Release -- --doctor`
-3. Connect a WebSocket client:
-   - `ws://127.0.0.1:18789/ws`
-4. (Optional) Use the CLI (OpenAI-compatible `/v1/chat/completions`):
-   - `dotnet run --project src/OpenClaw.Cli -c Release -- run "summarize this README" --file ./README.md`
-   - `dotnet run --project src/OpenClaw.Cli -c Release -- chat`
+  - `dotnet run --project src/OpenClaw.Gateway -c Release`
+  - Or validate config first: `dotnet run --project src/OpenClaw.Gateway -c Release -- --doctor`
+  - Optional config file: `dotnet run --project src/OpenClaw.Gateway -c Release -- --config ~/.openclaw/config.json`
+3. Use one of the built-in clients:
+  - Web UI: `http://127.0.0.1:18789/chat`
+  - WebSocket endpoint: `ws://127.0.0.1:18789/ws`
+  - CLI: `dotnet run --project src/OpenClaw.Cli -c Release -- chat`
+  - Companion app: `dotnet run --project src/OpenClaw.Companion -c Release`
 
 Environment variables for the CLI:
+
 - `OPENCLAW_BASE_URL` (default `http://127.0.0.1:18789`)
 - `OPENCLAW_AUTH_TOKEN` (only required when the gateway enforces auth)
+
+For advanced provider setup, webhook channels, and deployment hardening, see the [User Guide](USER_GUIDE.md) and [Security Guide](SECURITY.md).
+
+## Usage
+
+Common local usage paths:
+
+- Browser UI: start the gateway and open `http://127.0.0.1:18789/chat`
+- CLI chat: `dotnet run --project src/OpenClaw.Cli -c Release -- chat`
+- One-shot CLI run: `dotnet run --project src/OpenClaw.Cli -c Release -- run "summarize this README" --file ./README.md`
+- Desktop companion: `dotnet run --project src/OpenClaw.Companion -c Release`
+- Doctor/report mode: `dotnet run --project src/OpenClaw.Gateway -c Release -- --doctor`
+
+Common runtime choices:
+
+- Use `aot` when you want the trim-safe mainstream lane.
+- Use `jit` when you need expanded plugin compatibility or native dynamic plugins.
+- Leave `auto` if you want the artifact to choose based on dynamic-code support.
+
+The most practical local setup is:
+
+- Web UI or Companion for interactive usage
+- CLI for scripting and automation
+- `--doctor` before exposing a public bind or enabling plugins
 
 ## Companion app (Avalonia)
 
