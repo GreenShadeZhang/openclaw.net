@@ -76,6 +76,10 @@ public sealed record ToolInvocation
 [JsonSerializable(typeof(SecurityConfig))]
 [JsonSerializable(typeof(WebSocketConfig))]
 [JsonSerializable(typeof(ToolingConfig))]
+[JsonSerializable(typeof(SandboxConfig))]
+[JsonSerializable(typeof(SandboxToolConfig))]
+[JsonSerializable(typeof(SandboxExecutionRequest))]
+[JsonSerializable(typeof(SandboxResult))]
 [JsonSerializable(typeof(ChannelsConfig))]
 [JsonSerializable(typeof(SmsChannelConfig))]
 [JsonSerializable(typeof(TwilioSmsConfig))]
@@ -292,6 +296,10 @@ public sealed record ToolInvocation
 [JsonSerializable(typeof(ActorRateLimitStatus))]
 [JsonSerializable(typeof(List<ActorRateLimitStatus>))]
 [JsonSerializable(typeof(ActorRateLimitResponse))]
+[JsonSerializable(typeof(RetentionStatusResponse))]
+[JsonSerializable(typeof(RetentionSweepResponse))]
+[JsonSerializable(typeof(RetentionSweepErrorResponse))]
+[JsonSerializable(typeof(BranchRestoreResponse))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,

@@ -69,6 +69,59 @@ In practice:
 - `auto` chooses between `aot` and `jit` based on runtime capabilities
 - `native` remains the default orchestrator even in MAF-enabled artifacts
 
+## Optional Sandbox Execution
+
+OpenClaw.NET can optionally route high-risk native tools through [OpenSandbox](https://github.com/AIDotNet/OpenSandbox) instead of executing them on the gateway host.
+
+Current scope:
+
+- `shell`
+- `code_exec`
+- `browser`
+
+Key points:
+
+- sandbox routing is enabled by default in the shipped gateway config
+- the standard runtime artifact does not include the OpenSandbox integration package
+- the sandbox-enabled build is produced with `-p:OpenClawEnableOpenSandbox=true`
+- `Prefer` mode falls back to local execution if the provider is unavailable
+- `Require` mode fails closed and is the recommended public-bind setting for `shell`
+- set `OpenClaw:Sandbox:Provider=None` to force all sandbox-capable tools back to local execution
+
+Example:
+
+```json
+"OpenClaw": {
+  "Sandbox": {
+    "Provider": "OpenSandbox",
+    "Endpoint": "http://localhost:5000",
+    "ApiKey": "env:OPEN_SANDBOX_API_KEY",
+    "DefaultTTL": 300,
+    "Tools": {
+      "shell": {
+        "Mode": "Prefer",
+        "Template": "alpine:3.20",
+        "TTL": 300
+      },
+      "code_exec": {
+        "Mode": "Prefer",
+        "Template": "nikolaik/python-nodejs:python3.12-nodejs22-slim",
+        "TTL": 300
+      },
+      "browser": {
+        "Mode": "Prefer",
+        "Template": "mcr.microsoft.com/playwright:v1.52.0-noble",
+        "TTL": 600
+      }
+    }
+  }
+}
+```
+
+These are starter image choices. For public or production deployments, promote tools like `shell` to `Require` and replace the image URIs with images you control.
+
+See [docs/sandboxing.md](docs/sandboxing.md) for the architecture, build flag, local-switch behavior, and full config examples.
+
 ## Quick Links
 
 - [Quickstart Guide](docs/QUICKSTART.md)
@@ -77,6 +130,9 @@ In practice:
 - [Security Guide](SECURITY.md)
 - [Plugin Compatibility Guide](docs/COMPATIBILITY.md)
 - [Semantic Kernel Guide](docs/SEMANTIC_KERNEL.md)
+- [Plugin Compatibility Guide](COMPATIBILITY.md)
+- [Semantic Kernel Guide](SEMANTIC_KERNEL.md)
+- [Sandboxing Guide](docs/sandboxing.md)
 - [MAF Readiness Notes](docs/experiments/maf-aot-jit-readiness.md)
 - [Startup Architecture Notes](docs/architecture-startup-refactor.md)
 - [Changelog](CHANGELOG.md)
