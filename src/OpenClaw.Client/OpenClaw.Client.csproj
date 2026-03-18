@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>OpenClaw.Client</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsPackable>true</IsPackable>
+    <PackageId>OpenClaw.Client</PackageId>
+    <Description>Typed HTTP and WebSocket client SDK for OpenClaw.NET gateways.</Description>
+    <PackageTags>openclaw;client;dotnet;websocket;http</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenClaw.Core\OpenClaw.Core.csproj" />
+  </ItemGroup>
+</Project>

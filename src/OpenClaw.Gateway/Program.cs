@@ -22,6 +22,7 @@ if (bootstrap.ShouldExit)
 var startup = bootstrap.Startup
     ?? throw new InvalidOperationException("Bootstrap completed without a startup context.");
 
+builder.Services.AddOpenApi("openclaw-integration");
 builder.AddOpenClawObservability();
 builder.Services.AddOpenClawCoreServices(startup);
 builder.Services.AddOpenClawChannelServices(startup);
@@ -39,6 +40,7 @@ var app = builder.Build();
 var runtime = await app.InitializeOpenClawRuntimeAsync(startup);
 
 app.UseOpenClawPipeline(startup, runtime);
+app.MapOpenApi("/openapi/{documentName}.json");
 app.MapOpenClawEndpoints(startup, runtime);
 
 app.Run($"http://{startup.Config.BindAddress}:{startup.Config.Port}");

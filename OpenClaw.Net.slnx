@@ -8,6 +8,7 @@
     <Project Path="samples/OpenClaw.SemanticKernelInteropHost/OpenClaw.SemanticKernelInteropHost.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/OpenClaw.Client/OpenClaw.Client.csproj" />
     <Project Path="src/OpenClaw.Cli/OpenClaw.Cli.csproj" />
     <Project Path="src/OpenClaw.Companion/OpenClaw.Companion.csproj" />
     <Project Path="src/OpenClaw.MicrosoftAgentFrameworkAdapter/OpenClaw.MicrosoftAgentFrameworkAdapter.csproj" />

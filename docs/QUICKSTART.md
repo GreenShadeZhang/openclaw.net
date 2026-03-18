@@ -54,6 +54,8 @@ Default local endpoints:
 
 - Web UI: `http://127.0.0.1:18789/chat`
 - WebSocket: `ws://127.0.0.1:18789/ws`
+- Integration API: `http://127.0.0.1:18789/api/integration/status`
+- MCP endpoint: `http://127.0.0.1:18789/mcp`
 - Health: `http://127.0.0.1:18789/health`
 
 ## First Ways To Use It
@@ -83,6 +85,22 @@ dotnet run --project src/OpenClaw.Cli -c Release -- run "summarize this reposito
 ```bash
 dotnet run --project src/OpenClaw.Companion -c Release
 ```
+
+### Typed integration API and MCP
+
+Quick probes:
+
+```bash
+curl http://127.0.0.1:18789/api/integration/status
+```
+
+```bash
+curl -X POST http://127.0.0.1:18789/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":"2025-03-26"}}'
+```
+
+For .NET automation, use `OpenClaw.Client` for typed access to both the integration API and the MCP facade.
 
 ## Using A Config File
 
@@ -129,7 +147,8 @@ Additional support here includes:
 2. Start the gateway
 3. Use the browser UI or Companion for interactive work
 4. Use the CLI for scripted or repeatable tasks
-5. Switch to `jit` only when you actually need expanded plugin compatibility
+5. Use `OpenClaw.Client` when you want stable typed access to `/api/integration/*` or `/mcp`
+6. Switch to `jit` only when you actually need expanded plugin compatibility
 
 ## Next Docs
 

@@ -316,6 +316,7 @@
 
     <nav class="section-nav">
         <a href="#overview-section">Overview</a>
+        <a href="#integration-section">Integration</a>
         <a href="#ops-section">Ops</a>
         <a href="#sessions-section">Sessions</a>
         <a href="#settings-section">Settings</a>
@@ -334,6 +335,33 @@
             <div class="card">
                 <h2>Doctor</h2>
                 <pre id="doctor-output">Loading…</pre>
+            </div>
+        </section>
+
+        <section id="integration-section" class="grid">
+            <div class="card">
+                <h2>Integration API Snapshot</h2>
+                <div class="actions">
+                    <a href="/openapi/openclaw-integration.json" target="_blank">OpenAPI JSON</a>
+                </div>
+                <pre id="integration-dashboard-output">Loading…</pre>
+            </div>
+            <div class="card">
+                <h2>MCP Starter</h2>
+                <pre id="mcp-output">Loading…</pre>
+            </div>
+            <div class="card">
+                <h2>Integration Message</h2>
+                <div class="filters">
+                    <input id="integration-channel-input" type="text" placeholder="Channel (default: integration-api)">
+                    <input id="integration-sender-input" type="text" placeholder="Sender (default: http-client)">
+                    <input id="integration-session-input" type="text" placeholder="Session (optional)">
+                </div>
+                <textarea id="integration-message-input" rows="5" placeholder="Send a test message through the typed integration API."></textarea>
+                <div class="actions" style="margin-top:0.75rem;">
+                    <button id="integration-message-send-button">Send Message</button>
+                </div>
+                <pre id="integration-message-output">Ready.</pre>
             </div>
         </section>
 
@@ -682,6 +710,13 @@
         const summaryOutput = document.getElementById('summary-output');
         const summaryPills = document.getElementById('summary-pills');
         const doctorOutput = document.getElementById('doctor-output');
+        const integrationDashboardOutput = document.getElementById('integration-dashboard-output');
+        const mcpOutput = document.getElementById('mcp-output');
+        const integrationChannelInput = document.getElementById('integration-channel-input');
+        const integrationSenderInput = document.getElementById('integration-sender-input');
+        const integrationSessionInput = document.getElementById('integration-session-input');
+        const integrationMessageInput = document.getElementById('integration-message-input');
+        const integrationMessageOutput = document.getElementById('integration-message-output');
         const retentionOutput = document.getElementById('retention-output');
         const approvalsOutput = document.getElementById('approvals-output');
         const approvalsHistoryOutput = document.getElementById('approvals-history-output');
@@ -850,6 +885,36 @@
             flash.className = 'flash';
         }
 
+        function loadMcpGuide() {
+            renderJson(mcpOutput, {
+                endpoint: '/mcp',
+                auth: 'Bearer token on non-loopback binds',
+                transport: 'HTTP JSON-RPC 2.0 POST',
+                methods: [
+                    'initialize',
+                    'tools/list',
+                    'tools/call',
+                    'resources/list',
+                    'resources/read',
+                    'prompts/list'
+                ],
+                starterTools: [
+                    'openclaw.get_status',
+                    'openclaw.list_sessions',
+                    'openclaw.get_session',
+                    'openclaw.get_session_timeline',
+                    'openclaw.query_runtime_events',
+                    'openclaw.send_message'
+                ],
+                example: {
+                    jsonrpc: '2.0',
+                    id: 1,
+                    method: 'tools/list',
+                    params: {}
+                }
+            });
+        }
+
         function toInt(value, fallback = 0) {
             const parsed = Number.parseInt(value, 10);
             return Number.isFinite(parsed) ? parsed : fallback;
@@ -1000,26 +1065,27 @@
         }
 
         async function loadSummary() {
-            const { resp, data } = await api('/admin/summary');
+            const { resp, data } = await api('/api/integration/dashboard');
             if (!resp.ok) {
                 summaryPills.innerHTML = '';
                 renderJson(summaryOutput, `Summary request failed (${resp.status})`);
+                renderJson(integrationDashboardOutput, `Integration dashboard failed (${resp.status})`);
                 return;
             }
 
-            const readiness = data.channels.readiness || [];
-            const readinessIssues = readiness.filter(item => item.status !== 'ready' && item.status !== 'disabled').length;
+            const runtime = data.status?.runtime || {};
             summaryPills.innerHTML = [
-                `Mode: ${data.auth.mode}`,
-                `Active sessions: ${data.runtime.activeSessions}`,
-                `Pending approvals: ${data.runtime.pendingApprovals}`,
-                `Retention: ${data.retention.enabled ? 'on' : 'off'}`,
-                `UI overrides: ${data.settings.overridesActive ? 'active' : 'none'}`,
-                `Allowlists: ${data.channels.allowlistSemantics}`,
-                `Channel issues: ${readinessIssues}`
+                `Mode: ${runtime.effectiveModeName || runtime.requestedMode || 'unknown'}`,
+                `Active sessions: ${data.status.activeSessions}`,
+                `Pending approvals: ${data.approvals.items.length}`,
+                `Approval history: ${data.approvalHistory.items.length}`,
+                `Providers: ${data.providers.routes.length}`,
+                `Plugins: ${data.plugins.items.length}`,
+                `Events: ${data.events.items.length}`
             ].map(value => `<span class="pill">${value}</span>`).join('');
 
             renderJson(summaryOutput, data);
+            renderJson(integrationDashboardOutput, data);
         }
 
         async function loadDoctor() {
@@ -1033,7 +1099,7 @@
         }
 
         async function loadApprovals() {
-            const { resp, data } = await api('/tools/approvals');
+            const { resp, data } = await api('/api/integration/approvals');
             if (!resp.ok) {
                 approvalsOutput.textContent = `Approvals request failed (${resp.status})`;
                 return;
@@ -1059,7 +1125,7 @@
         }
 
         async function loadApprovalHistory() {
-            const { resp, data } = await api('/tools/approvals/history?limit=12');
+            const { resp, data } = await api('/api/integration/approval-history?limit=12');
             if (!resp.ok) {
                 approvalsHistoryOutput.textContent = `Approval history failed (${resp.status})`;
                 return;
@@ -1081,12 +1147,12 @@
         }
 
         async function loadProviders() {
-            const { resp, data } = await api('/admin/providers');
+            const { resp, data } = await api('/api/integration/providers?recentTurnsLimit=50');
             renderJson(providersOutput, resp.ok ? data : `Providers request failed (${resp.status})`);
         }
 
         async function loadPlugins() {
-            const { resp, data } = await api('/admin/plugins');
+            const { resp, data } = await api('/api/integration/plugins');
             if (!resp.ok) {
                 pluginsOutput.textContent = `Plugins request failed (${resp.status})`;
                 return;
@@ -1138,12 +1204,12 @@
         }
 
         async function loadEvents() {
-            const { resp, data } = await api('/admin/events?limit=40');
+            const { resp, data } = await api('/api/integration/runtime-events?limit=40');
             renderJson(eventsOutput, resp.ok ? data : `Events request failed (${resp.status})`);
         }
 
         async function loadAudit() {
-            const { resp, data } = await api('/admin/audit?limit=40');
+            const { resp, data } = await api('/api/integration/operator-audit?limit=40');
             renderJson(auditOutput, resp.ok ? data : `Audit request failed (${resp.status})`);
         }
 
@@ -1189,7 +1255,7 @@
             if (sessionsState.channelId) params.set('channelId', sessionsState.channelId);
             if (sessionsState.senderId) params.set('senderId', sessionsState.senderId);
 
-            const { resp, data } = await api(`/admin/sessions?${params.toString()}`);
+            const { resp, data } = await api(`/api/integration/sessions?${params.toString()}`);
             if (!resp.ok) {
                 sessionsOutput.textContent = `Sessions request failed (${resp.status})`;
                 return;
@@ -1239,7 +1305,7 @@
 
         async function loadSessionDetail(sessionId) {
             sessionsState.selectedSessionId = sessionId;
-            const detail = await api(`/admin/sessions/${encodeURIComponent(sessionId)}`);
+            const detail = await api(`/api/integration/sessions/${encodeURIComponent(sessionId)}`);
             if (detail.resp.ok) {
                 renderJson(sessionDetailOutput, detail.data);
                 sessionStarredInput.checked = Boolean(detail.data.metadata?.starred);
@@ -1268,8 +1334,36 @@
                 `).join('') + `<div class="actions" style="margin-top:0.75rem;"><a href="/admin/sessions/${encodeURIComponent(sessionId)}/export" target="_blank">Export transcript</a><a href="/admin/sessions/export?search=${encodeURIComponent(sessionId)}" target="_blank">Export filtered JSON</a></div>`;
             }
 
-            const timeline = await api(`/admin/sessions/${encodeURIComponent(sessionId)}/timeline`);
+            const timeline = await api(`/api/integration/sessions/${encodeURIComponent(sessionId)}/timeline`);
             renderJson(sessionTimelineOutput, timeline.resp.ok ? timeline.data : `Timeline request failed (${timeline.resp.status})`);
+        }
+
+        async function sendIntegrationMessage() {
+            const text = integrationMessageInput.value.trim();
+            if (!text) {
+                showFlash('Enter a message first.', 'warn');
+                return;
+            }
+
+            const payload = {
+                channelId: integrationChannelInput.value.trim() || null,
+                senderId: integrationSenderInput.value.trim() || null,
+                sessionId: integrationSessionInput.value.trim() || null,
+                text
+            };
+
+            const { resp, data } = await mutate('/api/integration/messages', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            renderJson(integrationMessageOutput, resp.ok ? data : `Integration message failed (${resp.status})`);
+            showFlash(resp.ok ? 'Integration message queued.' : `Integration message failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+            if (resp.ok) {
+                integrationMessageInput.value = '';
+                await loadSummary();
+            }
         }
 
         async function loadPairing() {
@@ -1311,10 +1405,13 @@
         }
 
         async function refreshAll() {
+            loadMcpGuide();
             const authed = await syncAuth();
             if (!authed) {
                 clearFlash();
                 renderJson(summaryOutput, 'Login required.');
+                renderJson(integrationDashboardOutput, 'Login required.');
+                integrationMessageOutput.textContent = 'Login required.';
                 doctorOutput.textContent = 'Login required.';
                 retentionOutput.textContent = 'Login required.';
                 approvalsOutput.textContent = 'Login required.';
@@ -1587,6 +1684,8 @@
             await loadSummary();
             await loadDoctor();
         });
+
+        document.getElementById('integration-message-send-button').addEventListener('click', sendIntegrationMessage);
 
         window.addEventListener('beforeunload', () => {
             if (approvalsPollTimer) {

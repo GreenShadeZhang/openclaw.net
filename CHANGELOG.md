@@ -4,6 +4,15 @@ All notable changes to this project are tracked in this file.
 
 ## [Unreleased] - 2026-03-04
 
+### Integration API, MCP, and SDK
+- Added a gateway-hosted typed integration API under `/api/integration` for operational reads and inbound message enqueueing.
+- Added typed integration read models for dashboard snapshots, approvals, approval history, providers, plugins, operator audit, session detail, and session timelines.
+- Added a gateway-hosted MCP JSON-RPC facade at `/mcp` over the shared integration/runtime surface.
+- Added starter MCP contracts for initialize, tool listing/calling, resource listing/reading, resource templates, and prompt listing/retrieval.
+- Added a reusable `IntegrationApiFacade` so the integration API, MCP facade, and operator dashboard share the same gateway-side read logic.
+- Added a shared `OpenClaw.Client` package and expanded `OpenClawHttpClient` with typed integration API methods plus MCP helpers such as `InitializeMcpAsync`, `ListMcpToolsAsync`, `ReadMcpResourceAsync`, `GetMcpPromptAsync`, and `CallMcpToolAsync`.
+- Repointed the operator dashboard read paths to the typed integration API while keeping the existing admin mutation flows intact.
+
 ### Security
 - Bound tool-approval decisions to the original requester (`channelId` + `senderId`) for non-loopback/public binds.
 - Kept `POST /tools/approve` as an explicit admin override path.
@@ -12,7 +21,6 @@ All notable changes to this project are tracked in this file.
 - Enforced additional non-loopback startup hardening:
   - WhatsApp official mode requires signature validation + app secret.
   - WhatsApp bridge mode requires a bridge token.
-  - `raw:` secret detection now scans the full config object graph (not just Twilio auth token refs).
 - Hardened generic webhook HMAC verification:
   - `ValidateHmac=true` now requires a secret at config validation time.
   - Signature checks now use constant-time byte comparison and support `sha256=<hex>` header format.
@@ -68,10 +76,12 @@ All notable changes to this project are tracked in this file.
 - Added proactive expiry coverage in `SessionManagerTests` (`SweepExpiredActiveSessions`).
 - Expanded `NativePluginTests` with SQL write-bypass regression cases.
 - Expanded `SecurityTests` with InboxZero folder-sanitization coverage.
+- Added focused gateway/admin endpoint coverage for the typed integration API, MCP facade, route exposure, and the shared `OpenClaw.Client` MCP surface.
 
 ### Documentation
 - Updated:
   - `README.md`
+  - `QUICKSTART.md`
   - `USER_GUIDE.md`
   - `SECURITY.md`
   - `CHANGELOG.md`

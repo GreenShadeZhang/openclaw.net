@@ -191,6 +191,49 @@ You can also interact via the C# desktop interface:
 2. Start the UI: `dotnet run --project src/OpenClaw.Companion`
 The app will connect to `ws://127.0.0.1:18789/ws` automatically.
 
+### Typed integration API and MCP facade
+The gateway also exposes two typed automation surfaces alongside the browser UI, WebSocket endpoint, and OpenAI-compatible routes:
+
+- `/api/integration/*` for typed operational reads and inbound message enqueueing
+- `/mcp` for a gateway-hosted MCP JSON-RPC facade over the same runtime/integration data
+
+Current integration API coverage includes:
+
+- status and dashboard snapshots
+- pending approvals and approval history
+- provider and plugin health snapshots
+- operator audit events
+- session lists, session detail, and session timelines
+- runtime event queries
+- message enqueueing
+
+Current MCP coverage includes:
+
+- `initialize`
+- `tools/list` and `tools/call`
+- `resources/list`, `resources/templates/list`, and `resources/read`
+- `prompts/list` and `prompts/get`
+
+If you are building a .NET client, use `OpenClaw.Client` for typed access to both `/api/integration/*` and `/mcp`.
+
+Example:
+
+```csharp
+using System.Text.Json;
+using OpenClaw.Client;
+using OpenClaw.Core.Models;
+
+using var client = new OpenClawHttpClient("http://127.0.0.1:18789", authToken: null);
+
+var sessions = await client.ListSessionsAsync(page: 1, pageSize: 25, query: null, CancellationToken.None);
+var mcp = await client.InitializeMcpAsync(new McpInitializeRequest { ProtocolVersion = "2025-03-26" }, CancellationToken.None);
+
+using var emptyArguments = JsonDocument.Parse("{}");
+var status = await client.CallMcpToolAsync("openclaw.get_status", emptyArguments.RootElement.Clone(), CancellationToken.None);
+```
+
+On non-loopback/public binds, authenticate these surfaces with `Authorization: Bearer <token>`.
+
 ### Webhook Channels
 You can configure OpenClaw to listen to messages in the background natively.
 Enable them under the `Channels` block in your config.

@@ -31,11 +31,12 @@ If this repo is useful to you, star it.
 ## What The Codebase Includes Today
 
 - Gateway surfaces for HTTP, WebSocket, browser UI, webhooks, and OpenAI-compatible endpoints
+- Gateway-hosted typed integration API under `/api/integration/*` and a token-authenticated MCP JSON-RPC facade at `/mcp`
 - Agent runtime for tools, memory, sessions, skills, policy, approvals, and message pipeline execution
 - Two runtime lanes: trim-safe `aot` and broader-compatibility `jit`
 - Two artifact families: standard artifacts plus MAF-enabled artifacts where `Runtime.Orchestrator=maf` is optional
 - Built-in clients: browser UI at `/chat`, CLI, and Avalonia desktop companion
-- Reusable library packages in-repo: `OpenClaw.Core`, `OpenClaw.PluginKit`, and `OpenClaw.SemanticKernelAdapter`
+- Reusable library packages in-repo: `OpenClaw.Client`, `OpenClaw.Core`, `OpenClaw.PluginKit`, and `OpenClaw.SemanticKernelAdapter`
 - Optional integrations for Telegram, Twilio SMS, WhatsApp, Semantic Kernel, the JS/TS plugin bridge, and the MAF adapter
 
 ## Ecosystem Compatibility
@@ -214,6 +215,8 @@ The shortest local path is:
 3. Use one of the built-in clients:
   - Web UI: `http://127.0.0.1:18789/chat`
   - WebSocket endpoint: `ws://127.0.0.1:18789/ws`
+  - Integration status: `http://127.0.0.1:18789/api/integration/status`
+  - MCP endpoint: `http://127.0.0.1:18789/mcp`
   - CLI: `dotnet run --project src/OpenClaw.Cli -c Release -- chat`
   - Companion app: `dotnet run --project src/OpenClaw.Companion -c Release`
 
@@ -232,6 +235,8 @@ Common local usage paths:
 - CLI chat: `dotnet run --project src/OpenClaw.Cli -c Release -- chat`
 - One-shot CLI run: `dotnet run --project src/OpenClaw.Cli -c Release -- run "summarize this README" --file ./README.md`
 - Desktop companion: `dotnet run --project src/OpenClaw.Companion -c Release`
+- Typed integration API: `curl http://127.0.0.1:18789/api/integration/status`
+- MCP JSON-RPC: `POST http://127.0.0.1:18789/mcp`
 - Doctor/report mode: `dotnet run --project src/OpenClaw.Gateway -c Release -- --doctor`
 
 Common runtime choices:
@@ -244,7 +249,50 @@ The most practical local setup is:
 
 - Web UI or Companion for interactive usage
 - CLI for scripting and automation
+- `OpenClaw.Client` when you want typed .NET access to the integration API or MCP surface
 - `--doctor` before exposing a public bind or enabling plugins
+
+## Typed Integration API, MCP, and shared SDK
+
+The gateway now exposes three complementary remote surfaces:
+
+- `/v1/*` for OpenAI-compatible clients
+- `/api/integration/*` for stable typed operational reads and message enqueueing
+- `/mcp` for a gateway-hosted MCP JSON-RPC facade over the same integration/runtime data
+
+The typed integration API currently covers status, dashboard, approvals, approval history, providers, plugins, operator audit, sessions, session timelines, runtime events, and inbound message enqueueing.
+
+The MCP facade currently supports:
+
+- `initialize`
+- `tools/list` and `tools/call`
+- `resources/list`, `resources/templates/list`, and `resources/read`
+- `prompts/list` and `prompts/get`
+
+The shared `OpenClaw.Client` package now exposes matching .NET methods for both the typed integration API and the MCP surface.
+
+Example:
+
+```csharp
+using System.Text.Json;
+using OpenClaw.Client;
+using OpenClaw.Core.Models;
+
+using var client = new OpenClawHttpClient("http://127.0.0.1:18789", authToken: null);
+
+var dashboard = await client.GetIntegrationDashboardAsync(CancellationToken.None);
+var initialize = await client.InitializeMcpAsync(
+    new McpInitializeRequest { ProtocolVersion = "2025-03-26" },
+    CancellationToken.None);
+
+using var emptyArguments = JsonDocument.Parse("{}");
+var statusTool = await client.CallMcpToolAsync(
+    "openclaw.get_status",
+    emptyArguments.RootElement.Clone(),
+    CancellationToken.None);
+```
+
+When the gateway enforces auth, use `Authorization: Bearer <token>` for `/api/integration/*` and `/mcp` just like the other non-loopback client surfaces.
 
 ## Companion app (Avalonia)
 
