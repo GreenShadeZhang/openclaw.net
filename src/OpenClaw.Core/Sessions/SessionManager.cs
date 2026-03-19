@@ -224,6 +224,29 @@ public sealed class SessionManager
     }
 
     /// <summary>
+    /// Tries to get an active in-memory session by channel+sender pair. Returns null if not found in memory.
+    /// This is a synchronous, lock-free check against the active session cache only (no disk I/O).
+    /// </summary>
+    public Session? TryGetActive(string channelId, string senderId)
+    {
+        var key = string.Concat(channelId, ":", senderId);
+        return _active.TryGetValue(key, out var session) ? session : null;
+    }
+
+    /// <summary>
+    /// Tries to find an active in-memory session by its session ID. O(n) scan of active sessions.
+    /// </summary>
+    public Session? TryGetActiveById(string sessionId)
+    {
+        foreach (var session in _active.Values)
+        {
+            if (string.Equals(session.Id, sessionId, StringComparison.Ordinal))
+                return session;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Loads a specific session from memory or disk by its ID.
     /// </summary>
     public async ValueTask<Session?> LoadAsync(string sessionId, CancellationToken ct)

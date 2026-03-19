@@ -9,7 +9,8 @@ public sealed class NativeAgentRuntimeFactory : IAgentRuntimeFactory
     private AgentRuntime CreateRuntime(
         Microsoft.Extensions.AI.IChatClient chatClient,
         IReadOnlyList<OpenClaw.Core.Abstractions.ITool> tools,
-        AgentRuntimeFactoryContext context)
+        AgentRuntimeFactoryContext context,
+        OpenClaw.Core.Observability.ToolUsageTracker? toolUsageTracker = null)
         => new(
             chatClient,
             tools,
@@ -35,11 +36,13 @@ public sealed class NativeAgentRuntimeFactory : IAgentRuntimeFactory
             sessionTokenBudget: context.Config.SessionTokenBudget,
             recall: context.Config.Memory.Recall,
             toolSandbox: context.ToolSandbox,
-            gatewayConfig: context.Config);
+            gatewayConfig: context.Config,
+            toolUsageTracker: toolUsageTracker);
 
     public IAgentRuntime Create(AgentRuntimeFactoryContext context)
     {
-        IAgentRuntime agentRuntime = CreateRuntime(context.ChatClient, context.Tools, context);
+        var toolUsageTracker = context.ToolUsageTracker;
+        IAgentRuntime agentRuntime = CreateRuntime(context.ChatClient, context.Tools, context, toolUsageTracker);
 
         if (!context.Config.Delegation.Enabled || context.Config.Delegation.Profiles.Count == 0)
             return agentRuntime;
@@ -55,6 +58,6 @@ public sealed class NativeAgentRuntimeFactory : IAgentRuntimeFactory
             logger: context.Logger,
             recall: context.Config.Memory.Recall);
 
-        return CreateRuntime(context.ChatClient, [.. context.Tools, delegateTool], context);
+        return CreateRuntime(context.ChatClient, [.. context.Tools, delegateTool], context, toolUsageTracker);
     }
 }

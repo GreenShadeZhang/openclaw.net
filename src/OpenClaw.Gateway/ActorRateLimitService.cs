@@ -9,6 +9,7 @@ internal sealed class ActorRateLimitService
 {
     private const string DirectoryName = "admin";
     private const string FileName = "rate-limit-policies.json";
+    private const int PruneInterval = 128;
 
     private sealed class WindowState
     {
@@ -16,13 +17,17 @@ internal sealed class ActorRateLimitService
         public int BurstCount;
         public long SustainedWindowSeconds;
         public int SustainedCount;
+        public long LastTouchedUnixSeconds;
     }
 
     private readonly string _path;
     private readonly Lock _gate = new();
     private readonly ConcurrentDictionary<string, WindowState> _windows = new(StringComparer.Ordinal);
     private readonly ILogger<ActorRateLimitService> _logger;
+    private long _pruneCounter;
     private List<ActorRateLimitPolicy>? _cached;
+
+    internal int ActiveWindowCount => _windows.Count;
 
     public ActorRateLimitService(string storagePath, ILogger<ActorRateLimitService> logger)
     {
@@ -75,7 +80,10 @@ internal sealed class ActorRateLimitService
             var items = LoadUnsafe();
             var removed = items.RemoveAll(item => string.Equals(item.Id, id, StringComparison.Ordinal)) > 0;
             if (removed)
+            {
                 SaveUnsafe(items);
+                RemoveWindowsForPolicy(id);
+            }
             return removed;
         }
     }
@@ -98,6 +106,8 @@ internal sealed class ActorRateLimitService
 
         if (policies.Length == 0)
             return true;
+
+        MaybePruneWindows(policies);
 
         foreach (var policy in policies)
         {
@@ -125,6 +135,7 @@ internal sealed class ActorRateLimitService
 
                 window.BurstCount++;
                 window.SustainedCount++;
+                window.LastTouchedUnixSeconds = nowUnix;
             }
         }
 
@@ -134,6 +145,7 @@ internal sealed class ActorRateLimitService
     public IReadOnlyList<ActorRateLimitStatus> SnapshotActive()
     {
         var policies = ListPolicies().ToDictionary(static item => item.Id, StringComparer.Ordinal);
+        MaybePruneWindows(policies.Values);
         var results = new List<ActorRateLimitStatus>();
         var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -173,6 +185,65 @@ internal sealed class ActorRateLimitService
             .OrderByDescending(static item => item.SustainedWindowStartedAtUtc)
             .Take(200)
             .ToArray();
+    }
+
+    private void MaybePruneWindows(IEnumerable<ActorRateLimitPolicy> policies)
+    {
+        if (Interlocked.Increment(ref _pruneCounter) % PruneInterval != 0)
+            return;
+
+        PruneStaleWindows(policies, nowUnix: null);
+    }
+
+    internal void PruneStaleWindows()
+        => PruneStaleWindows(ListPolicies(), nowUnix: null);
+
+    internal void PruneStaleWindows(long nowUnix)
+        => PruneStaleWindows(ListPolicies(), nowUnix);
+
+    private void PruneStaleWindows(IEnumerable<ActorRateLimitPolicy> policies, long? nowUnix)
+    {
+        var policiesById = policies.ToDictionary(static item => item.Id, StringComparer.Ordinal);
+        var currentUnix = nowUnix ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        foreach (var entry in _windows)
+        {
+            var separator = entry.Key.IndexOf(':', StringComparison.Ordinal);
+            if (separator <= 0)
+            {
+                _windows.TryRemove(entry.Key, out _);
+                continue;
+            }
+
+            var policyId = entry.Key[..separator];
+            if (!policiesById.TryGetValue(policyId, out var policy))
+            {
+                _windows.TryRemove(entry.Key, out _);
+                continue;
+            }
+
+            var remove = false;
+            lock (entry.Value)
+            {
+                var lastTouchedUnix = Math.Max(
+                    entry.Value.LastTouchedUnixSeconds,
+                    Math.Max(entry.Value.BurstWindowSeconds, entry.Value.SustainedWindowSeconds));
+                var staleAfterSeconds = Math.Max(policy.BurstWindowSeconds, policy.SustainedWindowSeconds) * 2L;
+                remove = lastTouchedUnix == 0 || currentUnix - lastTouchedUnix > staleAfterSeconds;
+            }
+
+            if (remove)
+                _windows.TryRemove(entry.Key, out _);
+        }
+    }
+
+    private void RemoveWindowsForPolicy(string policyId)
+    {
+        var prefix = policyId + ":";
+        foreach (var entry in _windows)
+        {
+            if (entry.Key.StartsWith(prefix, StringComparison.Ordinal))
+                _windows.TryRemove(entry.Key, out _);
+        }
     }
 
     private List<ActorRateLimitPolicy> LoadUnsafe()

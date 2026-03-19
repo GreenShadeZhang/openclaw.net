@@ -26,5 +26,17 @@ public sealed class AllowlistManagerTests
         Assert.Contains("123", eff.AllowedFrom);
         Assert.DoesNotContain("999", eff.AllowedFrom);
     }
-}
 
+    [Fact]
+    public void DynamicAllowlist_PathSanitization_StripsLeadingDots()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "openclaw-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        var mgr = new AllowlistManager(root, NullLogger<AllowlistManager>.Instance);
+        mgr.AddAllowedFrom("..", "123");
+
+        var file = Assert.Single(Directory.EnumerateFiles(Path.Combine(root, "allowlists"), "*.json"));
+        Assert.EndsWith("unknown.json", file, StringComparison.Ordinal);
+    }
+}

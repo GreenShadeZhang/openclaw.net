@@ -1,5 +1,8 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 
@@ -10,11 +13,25 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
     private readonly string _dbPath;
     private readonly bool _enableFtsRequested;
     private bool _ftsEnabled;
+    private readonly IEmbeddingGenerator<string, Embedding<float>>? _embeddingGenerator;
+    private readonly bool _enableVectors;
+    private readonly ILogger? _logger;
 
     public SqliteMemoryStore(string dbPath, bool enableFts)
+        : this(dbPath, enableFts, embeddingGenerator: null, enableVectors: false, logger: null)
+    {
+    }
+
+    public SqliteMemoryStore(string dbPath, bool enableFts,
+        IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator = null,
+        bool enableVectors = false,
+        ILogger? logger = null)
     {
         _dbPath = dbPath ?? throw new ArgumentNullException(nameof(dbPath));
         _enableFtsRequested = enableFts;
+        _embeddingGenerator = embeddingGenerator;
+        _enableVectors = enableVectors && embeddingGenerator is not null;
+        _logger = logger;
 
         var dir = Path.GetDirectoryName(Path.GetFullPath(_dbPath));
         if (!string.IsNullOrWhiteSpace(dir))
@@ -105,6 +122,20 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
             catch
             {
                 _ftsEnabled = false;
+            }
+        }
+
+        if (_enableVectors)
+        {
+            try
+            {
+                using var vecCmd = conn.CreateCommand();
+                vecCmd.CommandText = "ALTER TABLE notes ADD COLUMN embedding BLOB;";
+                vecCmd.ExecuteNonQuery();
+            }
+            catch
+            {
+                // Column already exists — safe to ignore
             }
         }
     }
@@ -200,6 +231,27 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         cmd.Parameters.AddWithValue("$updated_at", updatedAt);
 
         await cmd.ExecuteNonQueryAsync(ct);
+
+        if (_enableVectors && _embeddingGenerator is not null)
+        {
+            try
+            {
+                var embeddingResult = await _embeddingGenerator.GenerateAsync([content], cancellationToken: ct);
+                if (embeddingResult is { Count: > 0 })
+                {
+                    var blob = SerializeEmbedding(embeddingResult[0]);
+                    await using var vecCmd = conn.CreateCommand();
+                    vecCmd.CommandText = "UPDATE notes SET embedding = $embedding WHERE key = $key;";
+                    vecCmd.Parameters.AddWithValue("$embedding", blob);
+                    vecCmd.Parameters.AddWithValue("$key", key);
+                    await vecCmd.ExecuteNonQueryAsync(ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to generate embedding for note '{Key}'", key);
+            }
+        }
     }
 
     public async ValueTask DeleteNoteAsync(string key, CancellationToken ct)
@@ -250,38 +302,119 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
 
         if (_ftsEnabled)
         {
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                SELECT n.key, n.content, n.updated_at, bm25(notes_fts) AS rank
-                FROM notes_fts
-                JOIN notes n ON n.key = notes_fts.key
-                WHERE notes_fts MATCH $q
-                  AND n.key LIKE $prefix || '%'
-                ORDER BY rank ASC, n.updated_at DESC
-                LIMIT $limit;
-                """;
-            cmd.Parameters.AddWithValue("$q", query);
-            cmd.Parameters.AddWithValue("$prefix", prefix);
-            cmd.Parameters.AddWithValue("$limit", limit);
-
-            var hits = new List<MemoryNoteHit>();
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
+            if (_enableVectors && _embeddingGenerator is not null)
             {
-                var key = reader.GetString(0);
-                var content = reader.GetString(1);
-                var updatedAt = reader.GetInt64(2);
-                var rank = reader.GetDouble(3);
-
-                hits.Add(new MemoryNoteHit
+                // Generate query embedding
+                float[]? queryEmbedding = null;
+                try
                 {
-                    Key = key,
-                    Content = content,
-                    UpdatedAt = DateTimeOffset.FromUnixTimeSeconds(updatedAt),
-                    Score = (float)(-rank)
-                });
+                    var qEmb = await _embeddingGenerator.GenerateAsync([query], cancellationToken: ct);
+                    if (qEmb is { Count: > 0 })
+                        queryEmbedding = qEmb[0].Vector.ToArray();
+                }
+                catch { /* fall through to FTS-only */ }
+
+                if (queryEmbedding is not null)
+                {
+                    var widerLimit = Math.Min(limit * 5, 100);
+                    await using var cmd = conn.CreateCommand();
+                    cmd.CommandText = $"""
+                        SELECT n.key, n.content, n.updated_at, bm25(notes_fts) AS rank, n.embedding
+                        FROM notes_fts
+                        JOIN notes n ON n.key = notes_fts.key
+                        WHERE notes_fts MATCH $q
+                          AND n.key LIKE $prefix || '%'
+                        ORDER BY rank ASC, n.updated_at DESC
+                        LIMIT $limit;
+                        """;
+                    cmd.Parameters.AddWithValue("$q", query);
+                    cmd.Parameters.AddWithValue("$prefix", prefix);
+                    cmd.Parameters.AddWithValue("$limit", widerLimit);
+
+                    var candidates = new List<(string Key, string Content, DateTimeOffset UpdatedAt, double Bm25, byte[]? EmbeddingBlob)>();
+                    await using var reader = await cmd.ExecuteReaderAsync(ct);
+                    while (await reader.ReadAsync(ct))
+                    {
+                        var embBlob = reader.IsDBNull(4) ? null : (byte[])reader.GetValue(4);
+                        candidates.Add((
+                            reader.GetString(0),
+                            reader.GetString(1),
+                            DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(2)),
+                            reader.GetDouble(3),
+                            embBlob
+                        ));
+                    }
+
+                    if (candidates.Count == 0)
+                        return [];
+
+                    // Normalize BM25 scores (they're negative, lower = better)
+                    var minBm25 = candidates.Min(c => c.Bm25);
+                    var maxBm25 = candidates.Max(c => c.Bm25);
+                    var bm25Range = maxBm25 - minBm25;
+
+                    var scored = candidates.Select(c =>
+                    {
+                        var bm25Norm = bm25Range > 0 ? 1.0 - (c.Bm25 - minBm25) / bm25Range : 1.0;
+                        var embFloats = DeserializeEmbedding(c.EmbeddingBlob);
+                        var cosine = embFloats is not null
+                            ? (double)CosineSimilarity(queryEmbedding.AsSpan(), embFloats.AsSpan())
+                            : 0.0;
+                        var combined = embFloats is not null
+                            ? bm25Norm * 0.4 + cosine * 0.6
+                            : bm25Norm; // FTS-only score for candidates without embeddings
+
+                        return new MemoryNoteHit
+                        {
+                            Key = c.Key,
+                            Content = c.Content,
+                            UpdatedAt = c.UpdatedAt,
+                            Score = (float)combined
+                        };
+                    })
+                    .OrderByDescending(h => h.Score)
+                    .Take(limit)
+                    .ToList();
+
+                    return scored;
+                }
             }
-            return hits;
+
+            // Standard FTS search (no vectors or embedding generation failed)
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    SELECT n.key, n.content, n.updated_at, bm25(notes_fts) AS rank
+                    FROM notes_fts
+                    JOIN notes n ON n.key = notes_fts.key
+                    WHERE notes_fts MATCH $q
+                      AND n.key LIKE $prefix || '%'
+                    ORDER BY rank ASC, n.updated_at DESC
+                    LIMIT $limit;
+                    """;
+                cmd.Parameters.AddWithValue("$q", query);
+                cmd.Parameters.AddWithValue("$prefix", prefix);
+                cmd.Parameters.AddWithValue("$limit", limit);
+
+                var hits = new List<MemoryNoteHit>();
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var key = reader.GetString(0);
+                    var content = reader.GetString(1);
+                    var updatedAt = reader.GetInt64(2);
+                    var rank = reader.GetDouble(3);
+
+                    hits.Add(new MemoryNoteHit
+                    {
+                        Key = key,
+                        Content = content,
+                        UpdatedAt = DateTimeOffset.FromUnixTimeSeconds(updatedAt),
+                        Score = (float)(-rank)
+                    });
+                }
+                return hits;
+            }
         }
         else
         {
@@ -724,6 +857,85 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         }
 
         return deleted;
+    }
+
+    internal static byte[] SerializeEmbedding(Embedding<float> embedding)
+    {
+        var vector = embedding.Vector;
+        return MemoryMarshal.AsBytes(vector.Span).ToArray();
+    }
+
+    internal static float[]? DeserializeEmbedding(byte[]? blob)
+    {
+        if (blob is null || blob.Length == 0 || blob.Length % sizeof(float) != 0)
+            return null;
+        var floats = new float[blob.Length / sizeof(float)];
+        Buffer.BlockCopy(blob, 0, floats, 0, blob.Length);
+        return floats;
+    }
+
+    internal static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
+    {
+        if (a.Length != b.Length || a.Length == 0)
+            return 0f;
+
+        float dot = 0, normA = 0, normB = 0;
+        for (int i = 0; i < a.Length; i++)
+        {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+
+        var denom = MathF.Sqrt(normA) * MathF.Sqrt(normB);
+        return denom == 0f ? 0f : dot / denom;
+    }
+
+    public async Task BackfillEmbeddingsAsync(int batchSize = 50, CancellationToken ct = default)
+    {
+        if (!_enableVectors || _embeddingGenerator is null)
+            return;
+
+        while (!ct.IsCancellationRequested)
+        {
+            await using var conn = new SqliteConnection(ConnectionString);
+            await conn.OpenAsync(ct);
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT key, content FROM notes WHERE embedding IS NULL LIMIT $limit;";
+            cmd.Parameters.AddWithValue("$limit", batchSize);
+
+            var batch = new List<(string Key, string Content)>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                batch.Add((reader.GetString(0), reader.GetString(1)));
+
+            if (batch.Count == 0)
+                break;
+
+            foreach (var (key, content) in batch)
+            {
+                try
+                {
+                    var result = await _embeddingGenerator.GenerateAsync([content], cancellationToken: ct);
+                    if (result is { Count: > 0 })
+                    {
+                        var blob = SerializeEmbedding(result[0]);
+                        await using var updateConn = new SqliteConnection(ConnectionString);
+                        await updateConn.OpenAsync(ct);
+                        await using var updateCmd = updateConn.CreateCommand();
+                        updateCmd.CommandText = "UPDATE notes SET embedding = $embedding WHERE key = $key;";
+                        updateCmd.Parameters.AddWithValue("$embedding", blob);
+                        updateCmd.Parameters.AddWithValue("$key", key);
+                        await updateCmd.ExecuteNonQueryAsync(ct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Backfill embedding failed for note '{Key}'", key);
+                }
+            }
+        }
     }
 
     public void Dispose()

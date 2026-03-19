@@ -117,6 +117,7 @@ public sealed class AllowlistManager
     private string GetPath(string channelId)
     {
         var safe = string.Concat(channelId.Where(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.'));
+        safe = safe.TrimStart('.');
         if (string.IsNullOrWhiteSpace(safe))
             safe = "unknown";
         return Path.Combine(_rootDir, safe + ".json");

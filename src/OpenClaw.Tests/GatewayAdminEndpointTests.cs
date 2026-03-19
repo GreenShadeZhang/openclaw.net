@@ -112,6 +112,196 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task HeartbeatEndpoints_PreviewSaveAndStatus_Work()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        await File.WriteAllTextAsync(Path.Combine(harness.StoragePath, "memory.md"), "Prefer concise summaries.");
+
+        var config = new HeartbeatConfigDto
+        {
+            Enabled = true,
+            CronExpression = "@hourly",
+            Timezone = "UTC",
+            DeliveryChannelId = "cron",
+            DeliverySubject = "Ops heartbeat",
+            ModelId = "gpt-4o-mini",
+            Tasks =
+            [
+                new HeartbeatTaskDto
+                {
+                    Id = "watch-critical-alerts",
+                    TemplateKey = "custom",
+                    Title = "Watch critical alerts",
+                    Instruction = "Only report urgent findings."
+                }
+            ]
+        };
+
+        using var previewRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/heartbeat/preview")
+        {
+            Content = JsonContent(JsonSerializer.Serialize(config, CoreJsonContext.Default.HeartbeatConfigDto))
+        };
+        previewRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var previewResponse = await harness.Client.SendAsync(previewRequest);
+        Assert.Equal(HttpStatusCode.OK, previewResponse.StatusCode);
+
+        using var previewPayload = await ReadJsonAsync(previewResponse);
+        Assert.True(Path.IsPathRooted(previewPayload.RootElement.GetProperty("configPath").GetString()!));
+        Assert.True(Path.IsPathRooted(previewPayload.RootElement.GetProperty("heartbeatPath").GetString()!));
+        Assert.True(Path.IsPathRooted(previewPayload.RootElement.GetProperty("memoryMarkdownPath").GetString()!));
+        Assert.Equal("gpt-4o-mini", previewPayload.RootElement.GetProperty("costEstimate").GetProperty("modelId").GetString());
+        Assert.Equal(0, previewPayload.RootElement.GetProperty("issues").GetArrayLength());
+
+        using var saveRequest = new HttpRequestMessage(HttpMethod.Put, "/admin/heartbeat")
+        {
+            Content = JsonContent(JsonSerializer.Serialize(config, CoreJsonContext.Default.HeartbeatConfigDto))
+        };
+        saveRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var saveResponse = await harness.Client.SendAsync(saveRequest);
+        Assert.Equal(HttpStatusCode.OK, saveResponse.StatusCode);
+
+        using var savePayload = await ReadJsonAsync(saveResponse);
+        var configPath = savePayload.RootElement.GetProperty("configPath").GetString()!;
+        var heartbeatPath = savePayload.RootElement.GetProperty("heartbeatPath").GetString()!;
+        Assert.True(File.Exists(configPath));
+        Assert.True(File.Exists(heartbeatPath));
+
+        var heartbeatMarkdown = await File.ReadAllTextAsync(heartbeatPath);
+        Assert.Contains("managed_by: openclaw_heartbeat_wizard", heartbeatMarkdown, StringComparison.Ordinal);
+        Assert.Contains("source_hash:", heartbeatMarkdown, StringComparison.Ordinal);
+
+        using var statusRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/heartbeat/status");
+        statusRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var statusResponse = await harness.Client.SendAsync(statusRequest);
+        Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
+
+        using var statusPayload = await ReadJsonAsync(statusResponse);
+        Assert.True(statusPayload.RootElement.GetProperty("configExists").GetBoolean());
+        Assert.True(statusPayload.RootElement.GetProperty("heartbeatExists").GetBoolean());
+        Assert.Equal(Path.Combine(harness.StoragePath, "memory.md"), statusPayload.RootElement.GetProperty("memoryMarkdownPath").GetString());
+        Assert.Equal("cron", statusPayload.RootElement.GetProperty("config").GetProperty("deliveryChannelId").GetString());
+    }
+
+    [Fact]
+    public async Task HeartbeatPreview_UsesSuggestionsAndCostEstimateVariesBySchedule()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        await harness.MemoryStore.SaveNoteAsync("competitor-watch", "Check https://example.com/status for outages.", CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(harness.StoragePath, "memory.md"), "Please keep checking https://example.com/status for major changes.");
+        var session = await harness.Runtime.SessionManager.GetOrCreateAsync("websocket", "tester", CancellationToken.None);
+        session.History.Add(new ChatTurn
+        {
+            Role = "user",
+            Content = "Please monitor https://example.com/status and /tmp/competitor-alerts for changes."
+        });
+        await harness.Runtime.SessionManager.PersistAsync(session, CancellationToken.None);
+
+        var dailyConfig = new HeartbeatConfigDto
+        {
+            Enabled = true,
+            CronExpression = "0 9 * * *",
+            Timezone = "UTC",
+            DeliveryChannelId = "cron",
+            ModelId = "gpt-4o-mini",
+            Tasks =
+            [
+                new HeartbeatTaskDto
+                {
+                    Id = "watch-site",
+                    TemplateKey = "website_monitoring",
+                    Title = "Watch competitor status page",
+                    Target = "https://example.com/status"
+                }
+            ]
+        };
+
+        using var dailyPreviewRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/heartbeat/preview")
+        {
+            Content = JsonContent(JsonSerializer.Serialize(dailyConfig, CoreJsonContext.Default.HeartbeatConfigDto))
+        };
+        dailyPreviewRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var dailyPreviewResponse = await harness.Client.SendAsync(dailyPreviewRequest);
+        Assert.Equal(HttpStatusCode.OK, dailyPreviewResponse.StatusCode);
+
+        using var dailyPayload = await ReadJsonAsync(dailyPreviewResponse);
+        Assert.Contains(
+            dailyPayload.RootElement.GetProperty("suggestions").EnumerateArray(),
+            item => string.Equals(item.GetProperty("target").GetString(), "https://example.com/status", StringComparison.Ordinal));
+        Assert.Contains(
+            dailyPayload.RootElement.GetProperty("suggestions").EnumerateArray(),
+            item => item.GetProperty("reason").GetString()!.Contains("memory.md", StringComparison.Ordinal));
+
+        var dailyRuns = dailyPayload.RootElement.GetProperty("costEstimate").GetProperty("estimatedRunsPerMonth").GetInt32();
+
+        var hourlyConfig = new HeartbeatConfigDto
+        {
+            Enabled = true,
+            CronExpression = "@hourly",
+            Timezone = "UTC",
+            DeliveryChannelId = "cron",
+            ModelId = "gpt-4o-mini",
+            Tasks = dailyConfig.Tasks
+        };
+
+        using var hourlyPreviewRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/heartbeat/preview")
+        {
+            Content = JsonContent(JsonSerializer.Serialize(hourlyConfig, CoreJsonContext.Default.HeartbeatConfigDto))
+        };
+        hourlyPreviewRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var hourlyPreviewResponse = await harness.Client.SendAsync(hourlyPreviewRequest);
+        Assert.Equal(HttpStatusCode.OK, hourlyPreviewResponse.StatusCode);
+
+        using var hourlyPayload = await ReadJsonAsync(hourlyPreviewResponse);
+        var hourlyRuns = hourlyPayload.RootElement.GetProperty("costEstimate").GetProperty("estimatedRunsPerMonth").GetInt32();
+
+        Assert.True(hourlyRuns > dailyRuns);
+    }
+
+    [Fact]
+    public async Task HeartbeatSave_InvalidConfig_ReturnsBadRequest()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        var invalidConfig = new HeartbeatConfigDto
+        {
+            Enabled = true,
+            CronExpression = "not-a-cron",
+            Timezone = "Mars/Phobos",
+            DeliveryChannelId = "telegram",
+            Tasks = []
+        };
+
+        using var saveRequest = new HttpRequestMessage(HttpMethod.Put, "/admin/heartbeat")
+        {
+            Content = JsonContent(JsonSerializer.Serialize(invalidConfig, CoreJsonContext.Default.HeartbeatConfigDto))
+        };
+        saveRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var saveResponse = await harness.Client.SendAsync(saveRequest);
+
+        Assert.Equal(HttpStatusCode.BadRequest, saveResponse.StatusCode);
+        using var payload = await ReadJsonAsync(saveResponse);
+        Assert.NotEqual(0, payload.RootElement.GetProperty("issues").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task AdminSettings_Mutation_RejectsOversizedPayload()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        var oversizedFooter = new string('x', 300_000);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/settings")
+        {
+            Content = JsonContent($$"""{"usageFooter":"{{oversizedFooter}}"}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+    }
+
+    [Fact]
     public async Task ToolsApprovals_AndHistory_AreServed()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
@@ -680,6 +870,9 @@ public sealed class GatewayAdminEndpointTests
             "/admin/rate-limits",
             "/admin/rate-limits/{id}",
             "/admin/settings",
+            "/admin/heartbeat",
+            "/admin/heartbeat/preview",
+            "/admin/heartbeat/status",
             "/tools/approvals",
             "/tools/approvals/history",
             "/tools/approval-policies",
@@ -790,26 +983,54 @@ public sealed class GatewayAdminEndpointTests
         builder.Services.AddOpenApi("openclaw-integration");
         builder.Services.ConfigureHttpJsonOptions(opts => opts.SerializerOptions.TypeInfoResolverChain.Add(CoreJsonContext.Default));
         var memoryStore = new FileMemoryStore(storagePath, maxCachedSessions: 8);
+        var sessionManager = new SessionManager(memoryStore, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, memoryStore, sessionManager, NullLogger<HeartbeatService>.Instance);
         builder.Services.AddSingleton<IMemoryStore>(memoryStore);
+        builder.Services.AddSingleton(sessionManager);
+        builder.Services.AddSingleton(heartbeatService);
         builder.Services.AddSingleton(new BrowserSessionAuthService(config));
         builder.Services.AddSingleton(new AdminSettingsService(
             config,
             AdminSettingsService.CreateSnapshot(config),
             AdminSettingsService.GetSettingsPath(config),
             NullLogger<AdminSettingsService>.Instance));
+        builder.Services.AddSingleton(new ProviderUsageTracker());
+        builder.Services.AddSingleton(new ToolUsageTracker());
+        builder.Services.AddSingleton(new RuntimeEventStore(storagePath, NullLogger<RuntimeEventStore>.Instance));
+        builder.Services.AddSingleton(new ContractStore(storagePath, NullLogger<ContractStore>.Instance));
+        builder.Services.AddSingleton(sp =>
+        {
+            var contractStartup = new GatewayStartupContext
+            {
+                Config = config,
+                RuntimeState = RuntimeModeResolver.Resolve(config.Runtime),
+                IsNonLoopbackBind = nonLoopbackBind,
+                WorkspacePath = null
+            };
+            return new ContractGovernanceService(
+                contractStartup,
+                sp.GetRequiredService<ContractStore>(),
+                sp.GetRequiredService<RuntimeEventStore>(),
+                sp.GetRequiredService<ProviderUsageTracker>(),
+                NullLogger<ContractGovernanceService>.Instance);
+        });
 
         var app = builder.Build();
-        var runtime = CreateRuntime(config, storagePath, memoryStore);
+        var runtime = CreateRuntime(config, storagePath, memoryStore, sessionManager, heartbeatService);
         app.MapOpenApi("/openapi/{documentName}.json");
         app.MapOpenClawEndpoints(startup, runtime);
         await app.StartAsync();
 
-        return new GatewayTestHarness(app, app.GetTestClient(), runtime, config.AuthToken!);
+        return new GatewayTestHarness(app, app.GetTestClient(), runtime, config.AuthToken!, storagePath, memoryStore);
     }
 
-    private static GatewayAppRuntime CreateRuntime(GatewayConfig config, string storagePath, IMemoryStore memoryStore)
+    private static GatewayAppRuntime CreateRuntime(
+        GatewayConfig config,
+        string storagePath,
+        IMemoryStore memoryStore,
+        SessionManager sessionManager,
+        HeartbeatService heartbeatService)
     {
-        var sessionManager = new SessionManager(memoryStore, config, NullLogger.Instance);
         var allowlistSemantics = AllowlistPolicy.ParseSemantics(config.Channels.AllowlistSemantics);
         var allowlists = new AllowlistManager(storagePath, NullLogger<AllowlistManager>.Instance);
         var recentSenders = new RecentSendersStore(storagePath, NullLogger<RecentSendersStore>.Instance);
@@ -874,6 +1095,7 @@ public sealed class GatewayAdminEndpointTests
             ApprovalAuditStore = approvalAuditStore,
             RuntimeMetrics = runtimeMetrics,
             ProviderUsage = providerUsage,
+            Heartbeat = heartbeatService,
             SkillWatcher = skillWatcher,
             PluginReports = Array.Empty<PluginLoadReport>(),
             Operations = new RuntimeOperationsState
@@ -896,10 +1118,12 @@ public sealed class GatewayAdminEndpointTests
             LockLastUsed = new ConcurrentDictionary<string, DateTimeOffset>(),
             AllowedOriginsSet = null,
             DynamicProviderOwners = Array.Empty<string>(),
+            EstimatedSkillPromptChars = 0,
             CronTask = null,
             TwilioSmsWebhookHandler = null,
             PluginHost = null,
-            NativeDynamicPluginHost = null
+            NativeDynamicPluginHost = null,
+            RegisteredToolNames = System.Collections.Frozen.FrozenSet<string>.Empty
         };
     }
 
@@ -907,7 +1131,9 @@ public sealed class GatewayAdminEndpointTests
         WebApplication App,
         HttpClient Client,
         GatewayAppRuntime Runtime,
-        string AuthToken) : IAsyncDisposable
+        string AuthToken,
+        string StoragePath,
+        IMemoryStore MemoryStore) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {

@@ -29,6 +29,8 @@ public sealed record OutboundMessage
     public required string ChannelId { get; init; }
     public required string RecipientId { get; init; }
     public required string Text { get; init; }
+    public string? SessionId { get; init; }
+    public string? CronJobName { get; init; }
     public string? Subject { get; init; }
     public string? ReplyToMessageId { get; init; }
 }

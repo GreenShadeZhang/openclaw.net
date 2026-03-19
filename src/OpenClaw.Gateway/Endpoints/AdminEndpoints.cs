@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Pipeline;
@@ -13,6 +15,8 @@ namespace OpenClaw.Gateway.Endpoints;
 
 internal static class AdminEndpoints
 {
+    private const int MaxAdminJsonBodyBytes = 256 * 1024;
+
     public static void MapOpenClawAdminEndpoints(
         this WebApplication app,
         GatewayStartupContext startup,
@@ -20,6 +24,7 @@ internal static class AdminEndpoints
     {
         var browserSessions = app.Services.GetRequiredService<BrowserSessionAuthService>();
         var adminSettings = app.Services.GetRequiredService<AdminSettingsService>();
+        var heartbeat = app.Services.GetRequiredService<HeartbeatService>();
         var sessionAdminStore = (ISessionAdminStore)app.Services.GetRequiredService<IMemoryStore>();
         var operations = runtime.Operations;
 
@@ -65,10 +70,11 @@ internal static class AdminEndpoints
             AuthSessionRequest? request = null;
             if (ctx.Request.ContentLength is > 0)
             {
-                request = await JsonSerializer.DeserializeAsync(
-                    ctx.Request.Body,
-                    CoreJsonContext.Default.AuthSessionRequest,
-                    ctx.RequestAborted);
+                var authRequest = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.AuthSessionRequest);
+                if (authRequest.Failure is not null)
+                    return authRequest.Failure;
+
+                request = authRequest.Value;
             }
 
             var ticket = browserSessions.Create(request?.Remember ?? false);
@@ -325,10 +331,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var snapshot = await JsonSerializer.DeserializeAsync(
-                ctx.Request.Body,
-                CoreJsonContext.Default.AdminSettingsSnapshot,
-                ctx.RequestAborted);
+            var snapshotPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.AdminSettingsSnapshot);
+            if (snapshotPayload.Failure is not null)
+                return snapshotPayload.Failure;
+
+            var snapshot = snapshotPayload.Value;
 
             if (snapshot is null)
             {
@@ -374,6 +381,86 @@ internal static class AdminEndpoints
                 result.RestartRequiredFields,
                 "Settings overrides cleared.");
             return Results.Json(response, CoreJsonContext.Default.AdminSettingsResponse);
+        });
+
+        app.MapGet("/admin/heartbeat", (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: false, endpointScope: "admin.heartbeat");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var preview = heartbeat.BuildPreview(heartbeat.LoadConfig(), runtime, ctx.RequestAborted);
+            return Results.Json(preview, CoreJsonContext.Default.HeartbeatPreviewResponse);
+        });
+
+        app.MapPost("/admin/heartbeat/preview", async (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.heartbeat.preview");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var request = await JsonSerializer.DeserializeAsync(
+                ctx.Request.Body,
+                CoreJsonContext.Default.HeartbeatConfigDto,
+                ctx.RequestAborted);
+
+            if (request is null)
+            {
+                return Results.BadRequest(new OperationStatusResponse
+                {
+                    Success = false,
+                    Error = "Heartbeat config payload is required."
+                });
+            }
+
+            var preview = heartbeat.BuildPreview(request, runtime, ctx.RequestAborted);
+            return Results.Json(preview, CoreJsonContext.Default.HeartbeatPreviewResponse);
+        });
+
+        app.MapPut("/admin/heartbeat", async (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.heartbeat.mutate");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+            var auth = authResult.Authorization!;
+
+            var request = await JsonSerializer.DeserializeAsync(
+                ctx.Request.Body,
+                CoreJsonContext.Default.HeartbeatConfigDto,
+                ctx.RequestAborted);
+
+            if (request is null)
+            {
+                return Results.BadRequest(new OperationStatusResponse
+                {
+                    Success = false,
+                    Error = "Heartbeat config payload is required."
+                });
+            }
+
+            var before = heartbeat.LoadConfig();
+            var preview = heartbeat.BuildPreview(request, runtime, ctx.RequestAborted);
+            var hasErrors = preview.Issues.Any(static issue => string.Equals(issue.Severity, "error", StringComparison.OrdinalIgnoreCase));
+            if (hasErrors)
+            {
+                RecordOperatorAudit(ctx, operations, auth, "heartbeat_save", "heartbeat.default", "Heartbeat save rejected by validation.", success: false, before, after: request);
+                return Results.Json(preview, CoreJsonContext.Default.HeartbeatPreviewResponse, statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            var saved = heartbeat.SaveConfig(request);
+            var savedPreview = heartbeat.BuildPreview(saved, runtime, ctx.RequestAborted);
+            RecordOperatorAudit(ctx, operations, auth, "heartbeat_save", "heartbeat.default", "Saved managed heartbeat configuration.", success: true, before, after: saved);
+            return Results.Json(savedPreview, CoreJsonContext.Default.HeartbeatPreviewResponse);
+        });
+
+        app.MapGet("/admin/heartbeat/status", (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: false, endpointScope: "admin.heartbeat.status");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var status = heartbeat.BuildStatus(runtime, ctx.RequestAborted);
+            return Results.Json(status, CoreJsonContext.Default.HeartbeatStatusResponse);
         });
 
         app.MapGet("/tools/approvals", (HttpContext ctx, string? channelId, string? senderId) =>
@@ -440,10 +527,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var request = await JsonSerializer.DeserializeAsync(
-                ctx.Request.Body,
-                CoreJsonContext.Default.ProviderPolicyRule,
-                ctx.RequestAborted);
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.ProviderPolicyRule);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
             if (request is null)
                 return Results.BadRequest(new OperationStatusResponse { Success = false, Error = "Provider policy payload is required." });
 
@@ -548,10 +636,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var request = await JsonSerializer.DeserializeAsync(
-                ctx.Request.Body,
-                CoreJsonContext.Default.SessionMetadataUpdateRequest,
-                ctx.RequestAborted);
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.SessionMetadataUpdateRequest);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
             if (request is null)
                 return Results.BadRequest(new OperationStatusResponse { Success = false, Error = "Session metadata payload is required." });
 
@@ -633,7 +722,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, CoreJsonContext.Default.PluginMutationRequest, ctx.RequestAborted);
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.PluginMutationRequest);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
             var state = operations.PluginHealth.SetDisabled(id, disabled: true, request?.Reason);
             RecordOperatorAudit(ctx, operations, auth, "plugin_disable", id, $"Disabled plugin '{id}'.", success: true, before: null, after: state);
             return Results.Json(new MutationResponse { Success = true, Message = "Plugin disabled.", RestartRequired = true }, CoreJsonContext.Default.MutationResponse);
@@ -646,7 +739,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, CoreJsonContext.Default.PluginMutationRequest, ctx.RequestAborted);
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.PluginMutationRequest);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
             var state = operations.PluginHealth.SetDisabled(id, disabled: false, request?.Reason);
             RecordOperatorAudit(ctx, operations, auth, "plugin_enable", id, $"Enabled plugin '{id}'.", success: true, before: null, after: state);
             return Results.Json(new MutationResponse { Success = true, Message = "Plugin enabled.", RestartRequired = true }, CoreJsonContext.Default.MutationResponse);
@@ -659,7 +756,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, CoreJsonContext.Default.PluginMutationRequest, ctx.RequestAborted);
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.PluginMutationRequest);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
             var state = operations.PluginHealth.SetQuarantined(id, quarantined: true, request?.Reason);
             RecordOperatorAudit(ctx, operations, auth, "plugin_quarantine", id, $"Quarantined plugin '{id}'.", success: true, before: null, after: state);
             return Results.Json(new MutationResponse { Success = true, Message = "Plugin quarantined.", RestartRequired = true }, CoreJsonContext.Default.MutationResponse);
@@ -672,7 +773,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, CoreJsonContext.Default.PluginMutationRequest, ctx.RequestAborted);
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.PluginMutationRequest);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
             var state = operations.PluginHealth.SetQuarantined(id, quarantined: false, request?.Reason);
             RecordOperatorAudit(ctx, operations, auth, "plugin_clear_quarantine", id, $"Cleared quarantine for plugin '{id}'.", success: true, before: null, after: state);
             return Results.Json(new MutationResponse { Success = true, Message = "Plugin quarantine cleared.", RestartRequired = true }, CoreJsonContext.Default.MutationResponse);
@@ -694,7 +799,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, CoreJsonContext.Default.ToolApprovalGrant, ctx.RequestAborted);
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.ToolApprovalGrant);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
             if (request is null)
                 return Results.BadRequest(new OperationStatusResponse { Success = false, Error = "Approval policy payload is required." });
 
@@ -812,7 +921,11 @@ internal static class AdminEndpoints
                 return authResult.Failure;
             var auth = authResult.Authorization!;
 
-            var request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, CoreJsonContext.Default.ActorRateLimitPolicy, ctx.RequestAborted);
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.ActorRateLimitPolicy);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
             if (request is null)
                 return Results.BadRequest(new OperationStatusResponse { Success = false, Error = "Rate-limit policy payload is required." });
 
@@ -834,6 +947,44 @@ internal static class AdminEndpoints
                 ? Results.Json(new MutationResponse { Success = true, Message = "Rate-limit policy deleted." }, CoreJsonContext.Default.MutationResponse)
                 : Results.NotFound(new MutationResponse { Success = false, Error = "Rate-limit policy not found." });
         });
+    }
+
+    private static async Task<JsonBodyReadResult<T>> ReadJsonBodyAsync<T>(HttpContext ctx, JsonTypeInfo<T> typeInfo)
+        where T : class
+    {
+        if (ctx.Request.ContentLength is > MaxAdminJsonBodyBytes)
+            return new(default, Results.StatusCode(StatusCodes.Status413PayloadTooLarge));
+
+        if (ctx.Request.ContentLength is 0)
+            return new(default, null);
+
+        var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
+        {
+            await using var payload = new MemoryStream();
+            while (true)
+            {
+                var read = await ctx.Request.Body.ReadAsync(buffer.AsMemory(0, buffer.Length), ctx.RequestAborted);
+                if (read == 0)
+                    break;
+
+                if (payload.Length + read > MaxAdminJsonBodyBytes)
+                    return new(default, Results.StatusCode(StatusCodes.Status413PayloadTooLarge));
+
+                await payload.WriteAsync(buffer.AsMemory(0, read), ctx.RequestAborted);
+            }
+
+            if (payload.Length == 0)
+                return new(default, null);
+
+            payload.Position = 0;
+            var value = await JsonSerializer.DeserializeAsync(payload, typeInfo, ctx.RequestAborted);
+            return new(value, null);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static AdminSettingsResponse BuildSettingsResponse(
@@ -956,6 +1107,7 @@ internal static class AdminEndpoints
             ActorRateLimitPolicy item => JsonSerializer.Serialize(item, CoreJsonContext.Default.ActorRateLimitPolicy),
             WebhookDeadLetterEntry item => JsonSerializer.Serialize(item, CoreJsonContext.Default.WebhookDeadLetterEntry),
             AdminSettingsSnapshot item => JsonSerializer.Serialize(item, CoreJsonContext.Default.AdminSettingsSnapshot),
+            HeartbeatConfigDto item => JsonSerializer.Serialize(item, CoreJsonContext.Default.HeartbeatConfigDto),
             _ => value.ToString()
         };
     }
@@ -1096,4 +1248,9 @@ internal static class AdminEndpoints
         var index = branchId.IndexOf(marker, StringComparison.Ordinal);
         return index > 0 ? branchId[..index] : null;
     }
+
+    private readonly record struct JsonBodyReadResult<T>(
+        T? Value,
+        IResult? Failure)
+        where T : class;
 }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.AI;
 using OpenClaw.Channels;
 using OpenClaw.Agent;
 using OpenClaw.Core.Abstractions;
@@ -27,6 +28,7 @@ internal static class CoreServicesExtensions
         services.AddSingleton<IMemoryStore>(_ => CreateMemoryStore(config));
         services.AddSingleton<RuntimeMetrics>();
         services.AddSingleton<ProviderUsageTracker>();
+        services.AddSingleton<ToolUsageTracker>();
         services.AddSingleton<LlmProviderRegistry>();
         services.AddSingleton<ProviderPolicyService>(sp =>
             new ProviderPolicyService(
@@ -36,6 +38,8 @@ internal static class CoreServicesExtensions
             new SessionMetadataStore(
                 config.Memory.StoragePath,
                 sp.GetRequiredService<ILogger<SessionMetadataStore>>()));
+        services.AddSingleton<HeartbeatService>();
+        services.AddSingleton<ICronJobSource, GatewayCronJobSource>();
         services.AddSingleton<ActorRateLimitService>(sp =>
             new ActorRateLimitService(
                 config.Memory.StoragePath,
@@ -70,7 +74,29 @@ internal static class CoreServicesExtensions
                     dbPath = Path.Combine(config.Memory.StoragePath, dbPath);
             }
 
-            return new SqliteMemoryStore(Path.GetFullPath(dbPath), config.Memory.Sqlite.EnableFts);
+            var sqliteConfig = config.Memory.Sqlite;
+            IEmbeddingGenerator<string, Embedding<float>>? embeddingGen = null;
+            if (sqliteConfig.EnableVectors && !string.IsNullOrWhiteSpace(sqliteConfig.EmbeddingModel))
+            {
+                embeddingGen = LlmClientFactory.CreateEmbeddingGenerator(config.Llm, sqliteConfig.EmbeddingModel);
+            }
+
+            var store = new SqliteMemoryStore(
+                Path.GetFullPath(dbPath),
+                sqliteConfig.EnableFts,
+                embeddingGenerator: embeddingGen,
+                enableVectors: sqliteConfig.EnableVectors);
+
+            if (embeddingGen is not null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await store.BackfillEmbeddingsAsync(); }
+                    catch { /* fire-and-forget */ }
+                });
+            }
+
+            return store;
         }
 
         return new FileMemoryStore(

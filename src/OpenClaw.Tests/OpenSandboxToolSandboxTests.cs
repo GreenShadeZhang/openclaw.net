@@ -143,6 +143,47 @@ public sealed class OpenSandboxToolSandboxTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ConcurrentLeaseRequests_CreateSingleSandbox()
+    {
+        var createCount = 0;
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath.EndsWith("/v1/sandboxes", StringComparison.Ordinal) == true)
+            {
+                Interlocked.Increment(ref createCount);
+                await Task.Delay(100, cancellationToken);
+                return JsonResponse("""{"id":"sb-shared","expiresAt":"2030-01-01T00:00:00Z"}""");
+            }
+
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath.EndsWith("/renew-expiration", StringComparison.Ordinal) == true)
+                return JsonResponse("""{"expiresAt":"2030-01-01T00:00:00Z"}""");
+
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath.EndsWith("/exec", StringComparison.Ordinal) == true)
+                return JsonResponse("""{"exitCode":0,"stdOut":"ok","stdErr":""}""");
+
+            if (request.Method == HttpMethod.Delete)
+                return new HttpResponseMessage(HttpStatusCode.NoContent);
+
+            throw new InvalidOperationException("Unexpected request.");
+        });
+
+        await using var sandbox = CreateSandbox(handler);
+        var request = new SandboxExecutionRequest
+        {
+            Command = "echo",
+            Arguments = ["hello"],
+            Template = "ghcr.io/example/shell:latest",
+            LeaseKey = "session:shared"
+        };
+
+        await Task.WhenAll(
+            sandbox.ExecuteAsync(request),
+            sandbox.ExecuteAsync(request));
+
+        Assert.Equal(1, createCount);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_HttpRequestException_MapsToUnavailableException()
     {
         var handler = new ThrowingHandler(new HttpRequestException("connection refused"));

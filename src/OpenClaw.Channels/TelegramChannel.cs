@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Http;
 using OpenClaw.Core.Models;
+using OpenClaw.Core.Security;
 
 namespace OpenClaw.Channels;
 
@@ -26,9 +27,7 @@ public sealed class TelegramChannel : IChannelAdapter
         _logger = logger;
         _http = HttpClientFactory.Create();
         
-        var tokenSource = config.BotTokenRef.StartsWith("env:") 
-            ? Environment.GetEnvironmentVariable(config.BotTokenRef[4..]) 
-            : config.BotToken;
+        var tokenSource = SecretResolver.Resolve(config.BotTokenRef) ?? config.BotToken;
 
         _botToken = tokenSource ?? throw new InvalidOperationException("Telegram bot token not configured or missing from environment.");
     }

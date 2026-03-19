@@ -241,6 +241,8 @@ public static class ConfigValidator
         if (string.IsNullOrWhiteSpace(expression))
             return false;
 
+        expression = NormalizeCronExpression(expression);
+
         var parts = expression.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length != 5)
             return false;
@@ -251,6 +253,16 @@ public static class ConfigValidator
                IsValidCronField(parts[3], 1, 12) &&
                IsValidCronField(parts[4], 0, 6);
     }
+
+    private static string NormalizeCronExpression(string expression)
+        => expression.Trim().ToLowerInvariant() switch
+        {
+            "@hourly" => "0 * * * *",
+            "@daily" => "0 0 * * *",
+            "@weekly" => "0 0 * * 0",
+            "@monthly" => "0 0 1 * *",
+            _ => expression
+        };
 
     private static bool IsValidCronField(string field, int min, int max)
     {

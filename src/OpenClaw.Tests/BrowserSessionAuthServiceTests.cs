@@ -51,4 +51,17 @@ public sealed class BrowserSessionAuthServiceTests
 
         Assert.True(longTicket.ExpiresAtUtc > shortTicket.ExpiresAtUtc.AddDays(5));
     }
+
+    [Fact]
+    public void Create_GeneratesHexCsrfTokens()
+    {
+        var service = new BrowserSessionAuthService(new GatewayConfig());
+
+        var first = service.Create(remember: false);
+        var second = service.Create(remember: false);
+
+        Assert.Matches("^[0-9A-F]{64}$", first.CsrfToken);
+        Assert.Matches("^[0-9A-F]{64}$", second.CsrfToken);
+        Assert.NotEqual(first.CsrfToken, second.CsrfToken);
+    }
 }

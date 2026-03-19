@@ -13,31 +13,31 @@ namespace OpenClaw.Core.Pipeline;
 /// </summary>
 public sealed class CronScheduler : BackgroundService
 {
-    private readonly GatewayConfig _config;
+    private readonly ICronJobSource _jobSource;
     private readonly ILogger<CronScheduler> _logger;
     private readonly ChannelWriter<InboundMessage> _pipelineChannel;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _runningJobs = new(StringComparer.OrdinalIgnoreCase);
 
-    public CronScheduler(GatewayConfig config, ILogger<CronScheduler> logger, ChannelWriter<InboundMessage> pipelineChannel)
+    public CronScheduler(ICronJobSource jobSource, ILogger<CronScheduler> logger, ChannelWriter<InboundMessage> pipelineChannel)
     {
-        _config = config;
+        _jobSource = jobSource;
         _logger = logger;
         _pipelineChannel = pipelineChannel;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (_config.Cron?.Enabled != true || _config.Cron.Jobs is null || _config.Cron.Jobs.Count == 0)
+        var initialJobs = _jobSource.GetJobs();
+        if (initialJobs.Count == 0)
         {
-            _logger.LogInformation("Cron Scheduler disabled or no jobs defined. Exiting background loop.");
-            return;
+            _logger.LogInformation("Cron Scheduler started with no jobs. Waiting for live cron registrations.");
         }
 
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
-        _logger.LogInformation("Cron Scheduler started. Monitoring {Count} jobs.", _config.Cron.Jobs.Count);
+        _logger.LogInformation("Cron Scheduler started. Monitoring {Count} initial jobs.", initialJobs.Count);
 
         // Optional: run selected jobs immediately once on startup (useful for testing / boot-time reports)
-        foreach (var job in _config.Cron.Jobs)
+        foreach (var job in initialJobs)
         {
             if (!job.RunOnStartup)
                 continue;
@@ -56,10 +56,14 @@ public sealed class CronScheduler : BackgroundService
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
+            var jobs = _jobSource.GetJobs();
+            if (jobs.Count == 0)
+                continue;
+
             var utcNow = DateTimeOffset.UtcNow;
 
             // Re-evaluate jobs at the top of the minute
-            foreach (var job in _config.Cron.Jobs)
+            foreach (var job in jobs)
             {
                 // Convert to job-specific timezone if configured, otherwise use UTC
                 var now = utcNow;
@@ -141,7 +145,7 @@ public sealed class CronScheduler : BackgroundService
     /// Evaluates a standard 5-field cron expression against a given time.
     /// (Minutes, Hours, Day of Month, Month, Day of Week)
     /// </summary>
-    internal static bool IsTime(string expression, DateTimeOffset time)
+    public static bool IsTime(string expression, DateTimeOffset time)
     {
         if (string.IsNullOrWhiteSpace(expression)) return false;
 

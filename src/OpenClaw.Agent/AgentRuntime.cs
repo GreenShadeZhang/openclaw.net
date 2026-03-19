@@ -88,7 +88,8 @@ public sealed class AgentRuntime : IAgentRuntime
         long sessionTokenBudget = 0,
         MemoryRecallConfig? recall = null,
         IToolSandbox? toolSandbox = null,
-        GatewayConfig? gatewayConfig = null)
+        GatewayConfig? gatewayConfig = null,
+        ToolUsageTracker? toolUsageTracker = null)
     {
         _chatClient = chatClient;
         _tools = tools;
@@ -129,7 +130,8 @@ public sealed class AgentRuntime : IAgentRuntime
             metrics,
             logger,
             config: gatewayConfig,
-            toolSandbox: toolSandbox);
+            toolSandbox: toolSandbox,
+            toolUsageTracker: toolUsageTracker);
         _cachedToolDeclarations = _toolExecutor.ToolDeclarations;
         _sessionTokenBudget = sessionTokenBudget;
         _recall = recall;

@@ -110,6 +110,46 @@ public static class LlmClientFactory
         };
     }
 
+    /// <summary>
+    /// Creates an embedding generator using the same provider/apiKey/endpoint as chat.
+    /// Returns null if embeddingModel is null or whitespace.
+    /// </summary>
+    public static IEmbeddingGenerator<string, Embedding<float>>? CreateEmbeddingGenerator(
+        LlmProviderConfig config, string? embeddingModel)
+    {
+        if (string.IsNullOrWhiteSpace(embeddingModel))
+            return null;
+
+        return config.Provider.ToLowerInvariant() switch
+        {
+            "openai" or "azure-openai" => CreateOpenAiEmbeddingClient(config, embeddingModel!),
+            "ollama" => CreateOpenAiEmbeddingClient(new LlmProviderConfig
+            {
+                ApiKey = config.ApiKey ?? "ollama",
+                Endpoint = config.Endpoint ?? "http://localhost:11434/v1",
+                Model = config.Model
+            }, embeddingModel!),
+            "openai-compatible" or "anthropic" or "google" or "groq" or "together" or "lmstudio" =>
+                CreateOpenAiEmbeddingClient(new LlmProviderConfig
+                {
+                    ApiKey = config.ApiKey,
+                    Model = config.Model,
+                    Endpoint = config.Endpoint
+                }, embeddingModel!),
+            _ => null
+        };
+    }
+
+    private static IEmbeddingGenerator<string, Embedding<float>> CreateOpenAiEmbeddingClient(
+        LlmProviderConfig config, string embeddingModel)
+    {
+        var transport = CreateTransportOptions(config.Endpoint);
+        var client = new OpenAI.OpenAIClient(
+            new ApiKeyCredential(config.ApiKey ?? throw new InvalidOperationException("API key required for embeddings.")),
+            CreateOpenAiClientOptions(transport));
+        return client.GetEmbeddingClient(embeddingModel).AsIEmbeddingGenerator();
+    }
+
     private static OpenAI.OpenAIClient CreateOpenAiClient(LlmProviderConfig llm)
     {
         if (string.IsNullOrWhiteSpace(llm.ApiKey))

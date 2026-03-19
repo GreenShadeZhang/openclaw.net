@@ -42,6 +42,15 @@ internal static class DiagnosticsEndpoints
             return Results.Json(runtime.ProviderUsage.Snapshot(), CoreJsonContext.Default.ListProviderUsageSnapshot);
         });
 
+        app.MapGet("/metrics/tools", (HttpContext ctx) =>
+        {
+            if (!EndpointHelpers.AuthorizeOperatorRequest(ctx, startup, browserSessions, requireCsrf: false).IsAuthorized)
+                return Results.Unauthorized();
+
+            var toolTracker = app.Services.GetRequiredService<OpenClaw.Core.Observability.ToolUsageTracker>();
+            return Results.Json(toolTracker.Snapshot(), CoreJsonContext.Default.ListToolUsageSnapshot);
+        });
+
         app.MapGet("/memory/retention/status", async (HttpContext ctx) =>
         {
             if (!EndpointHelpers.AuthorizeOperatorRequest(ctx, startup, browserSessions, requireCsrf: false).IsAuthorized)
@@ -215,7 +224,8 @@ internal static class DiagnosticsEndpoints
                 {
                     providers = runtime.ProviderUsage.Snapshot(),
                     routes = routeHealth,
-                    recentTurns = runtime.ProviderUsage.RecentTurns(limit: 25)
+                    recentTurns = runtime.ProviderUsage.RecentTurns(limit: 25),
+                    tools = app.Services.GetRequiredService<OpenClaw.Core.Observability.ToolUsageTracker>().Snapshot()
                 },
                 warnings = retentionWarning is null ? Array.Empty<string>() : [retentionWarning]
             };
@@ -295,6 +305,14 @@ internal static class DiagnosticsEndpoints
             sb.AppendLine("- routes:");
             foreach (var route in runtime.Operations.LlmExecution.SnapshotRoutes())
                 sb.AppendLine($"  - {route.ProviderId}/{route.ModelId}: circuit={route.CircuitState} requests={route.Requests} retries={route.Retries} errors={route.Errors}");
+            sb.AppendLine();
+
+            sb.AppendLine("Tool Usage");
+            var toolTracker = app.Services.GetRequiredService<OpenClaw.Core.Observability.ToolUsageTracker>();
+            foreach (var item in toolTracker.Snapshot())
+            {
+                sb.AppendLine($"- {item.ToolName}: calls={item.Calls} failures={item.Failures} timeouts={item.Timeouts} total_duration_ms={item.TotalDurationMs:F0}");
+            }
             sb.AppendLine();
 
             sb.AppendLine("Allowlists");

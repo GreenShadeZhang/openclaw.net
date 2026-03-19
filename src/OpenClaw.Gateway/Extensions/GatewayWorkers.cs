@@ -34,6 +34,7 @@ internal static class GatewayWorkers
         IReadOnlyDictionary<string, IChannelAdapter> channelAdapters,
         GatewayConfig config,
         CronScheduler? cronScheduler,
+        HeartbeatService heartbeatService,
         ToolApprovalService toolApprovalService,
         ApprovalAuditStore approvalAuditStore,
         PairingManager pairingManager,
@@ -41,8 +42,8 @@ internal static class GatewayWorkers
         RuntimeOperationsState operations)
     {
         StartSessionCleanup(lifetime, logger, sessionManager, sessionLocks, lockLastUsed);
-        StartInboundWorkers(lifetime, logger, workerCount, isNonLoopbackBind, sessionManager, sessionLocks, lockLastUsed, pipeline, middlewarePipeline, wsChannel, agentRuntime, config, cronScheduler, toolApprovalService, approvalAuditStore, pairingManager, commandProcessor, operations);
-        StartOutboundWorkers(lifetime, logger, workerCount, pipeline, channelAdapters);
+        StartInboundWorkers(lifetime, logger, workerCount, isNonLoopbackBind, sessionManager, sessionLocks, lockLastUsed, pipeline, middlewarePipeline, wsChannel, agentRuntime, config, cronScheduler, heartbeatService, toolApprovalService, approvalAuditStore, pairingManager, commandProcessor, operations);
+        StartOutboundWorkers(lifetime, logger, workerCount, pipeline, channelAdapters, heartbeatService);
     }
 
     private static void StartSessionCleanup(
@@ -130,6 +131,7 @@ internal static class GatewayWorkers
         IAgentRuntime agentRuntime,
         GatewayConfig config,
         CronScheduler? cronScheduler,
+        HeartbeatService heartbeatService,
         ToolApprovalService toolApprovalService,
         ApprovalAuditStore approvalAuditStore,
         PairingManager pairingManager,
@@ -147,6 +149,8 @@ internal static class GatewayWorkers
                         Session? session = null;
                         SemaphoreSlim? lockObj = null;
                         var lockAcquired = false;
+                        long initialInputTokens = 0;
+                        long initialOutputTokens = 0;
                         try
                         {
                             if (!msg.IsSystem)
@@ -338,6 +342,9 @@ internal static class GatewayWorkers
                             if (session is null)
                                 throw new InvalidOperationException("Session manager returned null session.");
 
+                            initialInputTokens = session.TotalInputTokens;
+                            initialOutputTokens = session.TotalOutputTokens;
+
                             lockObj = sessionLocks.GetOrAdd(session.Id, _ => new SemaphoreSlim(1, 1));
                             await lockObj.WaitAsync(lifetime.ApplicationStopping);
                             lockAcquired = true;
@@ -507,18 +514,29 @@ internal static class GatewayWorkers
                                 var responseText = await agentRuntime.RunAsync(session, messageText, lifetime.ApplicationStopping, approvalCallback: ApprovalCallback);
                                 await sessionManager.PersistAsync(session, lifetime.ApplicationStopping);
 
+                                var inputTokenDelta = session.TotalInputTokens - initialInputTokens;
+                                var outputTokenDelta = session.TotalOutputTokens - initialOutputTokens;
+                                var suppressHeartbeatDelivery = heartbeatService.ShouldSuppressResult(msg.CronJobName, responseText);
+                                if (heartbeatService.IsManagedHeartbeatJob(msg.CronJobName))
+                                    heartbeatService.RecordResult(session, responseText, suppressHeartbeatDelivery, inputTokenDelta, outputTokenDelta);
+
                                 // Append Usage Tracking string if configured
                                 if (config.UsageFooter is "tokens")
                                     responseText += $"\n\n---\n↑ {session.TotalInputTokens} in / {session.TotalOutputTokens} out tokens";
 
-                                await pipeline.OutboundWriter.WriteAsync(new OutboundMessage
+                                if (!suppressHeartbeatDelivery)
                                 {
-                                    ChannelId = msg.ChannelId,
-                                    RecipientId = msg.SenderId,
-                                    Text = responseText,
-                                    Subject = msg.Subject,
-                                    ReplyToMessageId = msg.MessageId
-                                }, lifetime.ApplicationStopping);
+                                    await pipeline.OutboundWriter.WriteAsync(new OutboundMessage
+                                    {
+                                        ChannelId = msg.ChannelId,
+                                        RecipientId = msg.SenderId,
+                                        Text = responseText,
+                                        SessionId = session.Id,
+                                        CronJobName = msg.CronJobName,
+                                        Subject = msg.Subject,
+                                        ReplyToMessageId = msg.MessageId
+                                    }, lifetime.ApplicationStopping);
+                                }
                             }
                         }
                         catch (OperationCanceledException) when (lifetime.ApplicationStopping.IsCancellationRequested)
@@ -534,10 +552,20 @@ internal static class GatewayWorkers
                         }
                         catch (Exception ex)
                         {
+                            if (heartbeatService.IsManagedHeartbeatJob(msg.CronJobName))
+                            {
+                                var inputTokenDelta = session is null ? 0 : session.TotalInputTokens - initialInputTokens;
+                                var outputTokenDelta = session is null ? 0 : session.TotalOutputTokens - initialOutputTokens;
+                                heartbeatService.RecordError(session, ex, inputTokenDelta, outputTokenDelta);
+                            }
+
                             if (session is not null)
                                 logger.LogError(ex, "Internal error processing message for session {SessionId}", session.Id);
                             else
                                 logger.LogError(ex, "Internal error processing message for channel {ChannelId} sender {SenderId}", msg.ChannelId, msg.SenderId);
+
+                            if (heartbeatService.IsManagedHeartbeatJob(msg.CronJobName))
+                                continue;
 
                             try
                             {
@@ -587,7 +615,8 @@ internal static class GatewayWorkers
         ILogger logger,
         int workerCount,
         MessagePipeline pipeline,
-        IReadOnlyDictionary<string, IChannelAdapter> channelAdapters)
+        IReadOnlyDictionary<string, IChannelAdapter> channelAdapters,
+        HeartbeatService heartbeatService)
     {
         for (var j = 0; j < workerCount; j++)
         {
@@ -609,6 +638,8 @@ internal static class GatewayWorkers
                             try
                             {
                                 await adapter.SendAsync(outbound, lifetime.ApplicationStopping);
+                                if (heartbeatService.IsManagedHeartbeatJob(outbound.CronJobName))
+                                    heartbeatService.RecordDeliverySucceeded(outbound.SessionId);
                                 break;
                             }
                             catch (OperationCanceledException) when (lifetime.ApplicationStopping.IsCancellationRequested)

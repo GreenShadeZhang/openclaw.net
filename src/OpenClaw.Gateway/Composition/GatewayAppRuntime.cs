@@ -36,6 +36,7 @@ internal sealed class GatewayAppRuntime
     public required ApprovalAuditStore ApprovalAuditStore { get; init; }
     public required RuntimeMetrics RuntimeMetrics { get; init; }
     public required ProviderUsageTracker ProviderUsage { get; init; }
+    public required HeartbeatService Heartbeat { get; init; }
     public required SkillWatcherService SkillWatcher { get; init; }
     public required IReadOnlyList<PluginLoadReport> PluginReports { get; init; }
     public required RuntimeOperationsState Operations { get; init; }
@@ -46,8 +47,12 @@ internal sealed class GatewayAppRuntime
     public required ConcurrentDictionary<string, DateTimeOffset> LockLastUsed { get; init; }
     public required FrozenSet<string>? AllowedOriginsSet { get; init; }
     public required IReadOnlyList<string> DynamicProviderOwners { get; init; }
+    public required int EstimatedSkillPromptChars { get; init; }
     public required CronScheduler? CronTask { get; init; }
     public TwilioSmsWebhookHandler? TwilioSmsWebhookHandler { get; init; }
     public PluginHost? PluginHost { get; init; }
     public NativeDynamicPluginHost? NativeDynamicPluginHost { get; init; }
+
+    /// <summary>Names of all registered tools (built-in + native plugins + bridge plugins).</summary>
+    public required FrozenSet<string> RegisteredToolNames { get; init; }
 }

@@ -37,6 +37,12 @@ public sealed class GatewayConfig
 
     /// <summary>Seconds to wait for in-flight requests to complete during shutdown. 0 = no drain.</summary>
     public int GracefulShutdownSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// Token cost rates by "provider:model" key, in USD per 1K tokens.
+    /// Used for contract-governed USD cost budgets. Example: { "openai:gpt-4o": 0.005 }
+    /// </summary>
+    public Dictionary<string, decimal> TokenCostRates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class LlmProviderConfig
@@ -105,7 +111,33 @@ public sealed class MemorySqliteConfig
 {
     public string DbPath { get; set; } = "./memory/openclaw.db";
     public bool EnableFts { get; set; } = true;
-    public bool EnableVectors { get; set; } = false; // reserved for future use
+    public bool EnableVectors { get; set; } = false;
+
+    /// <summary>Embedding model name (e.g. "text-embedding-3-small"). Null disables vector embeddings.</summary>
+    public string? EmbeddingModel { get; set; }
+
+    /// <summary>Embedding vector dimensions. Defaults to 1536 (OpenAI text-embedding-3-small).</summary>
+    public int EmbeddingDimensions { get; set; } = 1536;
+}
+
+/// <summary>
+/// Built-in token cost rates (USD per 1K tokens) for common provider:model combinations.
+/// Used as fallback when the operator has not configured TokenCostRates.
+/// </summary>
+public static class DefaultTokenCostRates
+{
+    public static IReadOnlyDictionary<string, decimal> Rates { get; } =
+        new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["openai:gpt-4o"] = 0.005m,
+            ["openai:gpt-4o-mini"] = 0.0003m,
+            ["openai:gpt-4.1"] = 0.004m,
+            ["openai:gpt-4.1-mini"] = 0.0008m,
+            ["openai:gpt-4.1-nano"] = 0.0002m,
+            ["anthropic:claude-sonnet-4-5"] = 0.006m,
+            ["anthropic:claude-haiku-3-5"] = 0.002m,
+            ["ollama"] = 0.0m,
+        };
 }
 
 public sealed class MemoryRecallConfig

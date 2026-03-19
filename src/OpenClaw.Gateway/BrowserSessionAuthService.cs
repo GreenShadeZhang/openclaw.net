@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Http;
 using OpenClaw.Core.Models;
 
@@ -28,7 +29,7 @@ internal sealed class BrowserSessionAuthService
         CleanupExpired();
 
         var sessionId = $"bws_{Guid.NewGuid():N}";
-        var csrfToken = Convert.ToHexString(Guid.NewGuid().ToByteArray()) + Convert.ToHexString(Guid.NewGuid().ToByteArray());
+        var csrfToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var lifetime = GetLifetime(remember);
         var expiresAtUtc = DateTimeOffset.UtcNow.Add(lifetime);
 

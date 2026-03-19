@@ -1,9 +1,12 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using OpenClaw.Agent;
 using OpenClaw.Channels;
+using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Memory;
 using OpenClaw.Core.Middleware;
 using OpenClaw.Core.Models;
@@ -24,6 +27,10 @@ public sealed class GatewayWorkersTests
         var store = new FileMemoryStore(storagePath, 4);
         var config = new GatewayConfig
         {
+            Memory = new MemoryConfig
+            {
+                StoragePath = storagePath
+            },
             Tooling = new ToolingConfig
             {
                 EnableBrowserTool = false
@@ -38,9 +45,11 @@ public sealed class GatewayWorkersTests
         };
 
         var sessionManager = new SessionManager(store, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, store, sessionManager, NullLogger<HeartbeatService>.Instance);
         var pipeline = new MessagePipeline();
         var middleware = new MiddlewarePipeline([]);
         var wsChannel = new WebSocketChannel(config.WebSocket);
+        await using var adapter = new RecordingChannelAdapter("telegram");
         var agentRuntime = Substitute.For<IAgentRuntime>();
         var toolApprovalService = new ToolApprovalService();
         var approvalAuditStore = new ApprovalAuditStore(storagePath, NullLogger<ApprovalAuditStore>.Instance);
@@ -85,9 +94,13 @@ public sealed class GatewayWorkersTests
             middleware,
             wsChannel,
             agentRuntime,
-            new Dictionary<string, OpenClaw.Core.Abstractions.IChannelAdapter>(StringComparer.Ordinal),
+            new Dictionary<string, IChannelAdapter>(StringComparer.Ordinal)
+            {
+                ["telegram"] = adapter
+            },
             config,
             cronScheduler: null,
+            heartbeatService,
             toolApprovalService,
             approvalAuditStore,
             pairingManager,
@@ -103,7 +116,7 @@ public sealed class GatewayWorkersTests
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        var outbound = await pipeline.OutboundReader.ReadAsync(timeout.Token);
+        var outbound = await adapter.ReadAsync(timeout.Token);
 
         Assert.Contains("not valid", outbound.Text, StringComparison.OrdinalIgnoreCase);
         Assert.NotNull(toolApprovalService.GetPending(approval.ApprovalId));
@@ -120,6 +133,10 @@ public sealed class GatewayWorkersTests
         var store = new FileMemoryStore(storagePath, 4);
         var config = new GatewayConfig
         {
+            Memory = new MemoryConfig
+            {
+                StoragePath = storagePath
+            },
             Tooling = new ToolingConfig
             {
                 EnableBrowserTool = false
@@ -134,9 +151,11 @@ public sealed class GatewayWorkersTests
         };
 
         var sessionManager = new SessionManager(store, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, store, sessionManager, NullLogger<HeartbeatService>.Instance);
         var pipeline = new MessagePipeline();
         var middleware = new MiddlewarePipeline([]);
         var wsChannel = new WebSocketChannel(config.WebSocket);
+        await using var adapter = new RecordingChannelAdapter("telegram");
         var agentRuntime = Substitute.For<IAgentRuntime>();
         agentRuntime.RunAsync(Arg.Any<Session>(), Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<ToolApprovalCallback?>(), Arg.Any<System.Text.Json.JsonElement?>())
             .Returns(async callInfo =>
@@ -199,9 +218,13 @@ public sealed class GatewayWorkersTests
             middleware,
             wsChannel,
             agentRuntime,
-            new Dictionary<string, OpenClaw.Core.Abstractions.IChannelAdapter>(StringComparer.Ordinal),
+            new Dictionary<string, IChannelAdapter>(StringComparer.Ordinal)
+            {
+                ["telegram"] = adapter
+            },
             config,
             cronScheduler: null,
+            heartbeatService,
             toolApprovalService,
             approvalAuditStore,
             pairingManager,
@@ -217,7 +240,7 @@ public sealed class GatewayWorkersTests
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        var outbound = await pipeline.OutboundReader.ReadAsync(timeout.Token);
+        var outbound = await adapter.ReadAsync(timeout.Token);
         Assert.Equal("ok", outbound.Text);
         Assert.Empty(toolApprovalService.ListPending());
         Assert.Contains(operations.RuntimeEvents.Query(new RuntimeEventQuery { Limit = 10 }), item => item.Action == "grant_consumed");
@@ -230,6 +253,10 @@ public sealed class GatewayWorkersTests
         var store = new FileMemoryStore(storagePath, 4);
         var config = new GatewayConfig
         {
+            Memory = new MemoryConfig
+            {
+                StoragePath = storagePath
+            },
             Tooling = new ToolingConfig
             {
                 EnableBrowserTool = false,
@@ -247,9 +274,11 @@ public sealed class GatewayWorkersTests
         };
 
         var sessionManager = new SessionManager(store, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, store, sessionManager, NullLogger<HeartbeatService>.Instance);
         var pipeline = new MessagePipeline();
         var middleware = new MiddlewarePipeline([]);
         var wsChannel = new WebSocketChannel(config.WebSocket);
+        await using var adapter = new RecordingChannelAdapter("telegram");
         var agentRuntime = Substitute.For<IAgentRuntime>();
         agentRuntime.RunAsync(Arg.Any<Session>(), Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<ToolApprovalCallback?>(), Arg.Any<System.Text.Json.JsonElement?>())
             .Returns(async callInfo =>
@@ -302,9 +331,13 @@ public sealed class GatewayWorkersTests
             middleware,
             wsChannel,
             agentRuntime,
-            new Dictionary<string, OpenClaw.Core.Abstractions.IChannelAdapter>(StringComparer.Ordinal),
+            new Dictionary<string, IChannelAdapter>(StringComparer.Ordinal)
+            {
+                ["telegram"] = adapter
+            },
             config,
             cronScheduler: null,
+            heartbeatService,
             toolApprovalService,
             approvalAuditStore,
             pairingManager,
@@ -320,8 +353,8 @@ public sealed class GatewayWorkersTests
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        var approvalPrompt = await pipeline.OutboundReader.ReadAsync(timeout.Token);
-        var finalResponse = await pipeline.OutboundReader.ReadAsync(timeout.Token);
+        var approvalPrompt = await adapter.ReadAsync(timeout.Token);
+        var finalResponse = await adapter.ReadAsync(timeout.Token);
 
         Assert.Contains("Tool approval required", approvalPrompt.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("timed-out", finalResponse.Text);
@@ -335,6 +368,463 @@ public sealed class GatewayWorkersTests
             item => item.Action == "timed_out");
     }
 
+    [Fact]
+    public async Task Start_ManagedHeartbeatOk_SuppressesDeliveryAndRecordsStatus()
+    {
+        var storagePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "openclaw-worker-tests", Guid.NewGuid().ToString("N"));
+        var store = new FileMemoryStore(storagePath, 4);
+        var config = new GatewayConfig
+        {
+            Memory = new MemoryConfig
+            {
+                StoragePath = storagePath
+            },
+            Tooling = new ToolingConfig
+            {
+                EnableBrowserTool = false
+            }
+        };
+
+        var sessionManager = new SessionManager(store, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, store, sessionManager, NullLogger<HeartbeatService>.Instance);
+        heartbeatService.SaveConfig(CreateManagedHeartbeatConfig());
+        var job = Assert.IsType<CronJobConfig>(heartbeatService.BuildManagedJob());
+
+        var pipeline = new MessagePipeline();
+        var middleware = new MiddlewarePipeline([]);
+        var wsChannel = new WebSocketChannel(config.WebSocket);
+        await using var adapter = new RecordingChannelAdapter("cron");
+        var agentRuntime = Substitute.For<IAgentRuntime>();
+        agentRuntime.RunAsync(Arg.Any<Session>(), Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<ToolApprovalCallback?>(), Arg.Any<System.Text.Json.JsonElement?>())
+            .Returns("HEARTBEAT_OK");
+        var toolApprovalService = new ToolApprovalService();
+        var approvalAuditStore = new ApprovalAuditStore(storagePath, NullLogger<ApprovalAuditStore>.Instance);
+        var pairingManager = new OpenClaw.Core.Security.PairingManager(storagePath, NullLogger<OpenClaw.Core.Security.PairingManager>.Instance);
+        var commandProcessor = new ChatCommandProcessor(sessionManager);
+        var runtimeMetrics = new OpenClaw.Core.Observability.RuntimeMetrics();
+        var providerRegistry = new LlmProviderRegistry();
+        var providerPolicies = new ProviderPolicyService(storagePath, NullLogger<ProviderPolicyService>.Instance);
+        var runtimeEvents = new RuntimeEventStore(storagePath, NullLogger<RuntimeEventStore>.Instance);
+        var operations = new RuntimeOperationsState
+        {
+            ProviderPolicies = providerPolicies,
+            ProviderRegistry = providerRegistry,
+            LlmExecution = new GatewayLlmExecutionService(
+                config,
+                providerRegistry,
+                providerPolicies,
+                runtimeEvents,
+                runtimeMetrics,
+                new OpenClaw.Core.Observability.ProviderUsageTracker(),
+                NullLogger<GatewayLlmExecutionService>.Instance),
+            PluginHealth = new PluginHealthService(storagePath, NullLogger<PluginHealthService>.Instance),
+            ApprovalGrants = new ToolApprovalGrantStore(storagePath, NullLogger<ToolApprovalGrantStore>.Instance),
+            RuntimeEvents = runtimeEvents,
+            OperatorAudit = new OperatorAuditStore(storagePath, NullLogger<OperatorAuditStore>.Instance),
+            WebhookDeliveries = new WebhookDeliveryStore(storagePath, NullLogger<WebhookDeliveryStore>.Instance),
+            ActorRateLimits = new ActorRateLimitService(storagePath, NullLogger<ActorRateLimitService>.Instance),
+            SessionMetadata = new SessionMetadataStore(storagePath, NullLogger<SessionMetadataStore>.Instance)
+        };
+
+        using var lifetime = new TestApplicationLifetime();
+        GatewayWorkers.Start(
+            lifetime,
+            NullLogger.Instance,
+            workerCount: 1,
+            isNonLoopbackBind: false,
+            sessionManager,
+            new ConcurrentDictionary<string, SemaphoreSlim>(),
+            new ConcurrentDictionary<string, DateTimeOffset>(),
+            pipeline,
+            middleware,
+            wsChannel,
+            agentRuntime,
+            new Dictionary<string, IChannelAdapter>(StringComparer.Ordinal)
+            {
+                ["cron"] = adapter
+            },
+            config,
+            cronScheduler: null,
+            heartbeatService,
+            toolApprovalService,
+            approvalAuditStore,
+            pairingManager,
+            commandProcessor,
+            operations);
+
+        await pipeline.InboundWriter.WriteAsync(new InboundMessage
+        {
+            IsSystem = true,
+            SessionId = job.SessionId,
+            CronJobName = job.Name,
+            ChannelId = job.ChannelId!,
+            SenderId = job.RecipientId!,
+            Subject = job.Subject,
+            Text = job.Prompt
+        });
+
+        var status = await WaitForHeartbeatStatusAsync(heartbeatService, TimeSpan.FromSeconds(2), static item => item.Outcome == "ok");
+
+        Assert.True(status.DeliverySuppressed);
+        Assert.Equal("ok", status.Outcome);
+        Assert.Equal(job.SessionId, status.SessionId);
+        Assert.Null(status.LastDeliveredAtUtc);
+        Assert.False(adapter.TryRead(out _));
+    }
+
+    [Fact]
+    public async Task Start_ManagedHeartbeatAlert_DeliversMessageAndRecordsStatus()
+    {
+        var storagePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "openclaw-worker-tests", Guid.NewGuid().ToString("N"));
+        var store = new FileMemoryStore(storagePath, 4);
+        var config = new GatewayConfig
+        {
+            Memory = new MemoryConfig
+            {
+                StoragePath = storagePath
+            },
+            Tooling = new ToolingConfig
+            {
+                EnableBrowserTool = false
+            }
+        };
+
+        var sessionManager = new SessionManager(store, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, store, sessionManager, NullLogger<HeartbeatService>.Instance);
+        heartbeatService.SaveConfig(CreateManagedHeartbeatConfig());
+        var job = Assert.IsType<CronJobConfig>(heartbeatService.BuildManagedJob());
+
+        var pipeline = new MessagePipeline();
+        var middleware = new MiddlewarePipeline([]);
+        var wsChannel = new WebSocketChannel(config.WebSocket);
+        await using var adapter = new RecordingChannelAdapter("cron");
+        var agentRuntime = Substitute.For<IAgentRuntime>();
+        agentRuntime.RunAsync(Arg.Any<Session>(), Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<ToolApprovalCallback?>(), Arg.Any<System.Text.Json.JsonElement?>())
+            .Returns("Urgent competitor alert");
+        var toolApprovalService = new ToolApprovalService();
+        var approvalAuditStore = new ApprovalAuditStore(storagePath, NullLogger<ApprovalAuditStore>.Instance);
+        var pairingManager = new OpenClaw.Core.Security.PairingManager(storagePath, NullLogger<OpenClaw.Core.Security.PairingManager>.Instance);
+        var commandProcessor = new ChatCommandProcessor(sessionManager);
+        var runtimeMetrics = new OpenClaw.Core.Observability.RuntimeMetrics();
+        var providerRegistry = new LlmProviderRegistry();
+        var providerPolicies = new ProviderPolicyService(storagePath, NullLogger<ProviderPolicyService>.Instance);
+        var runtimeEvents = new RuntimeEventStore(storagePath, NullLogger<RuntimeEventStore>.Instance);
+        var operations = new RuntimeOperationsState
+        {
+            ProviderPolicies = providerPolicies,
+            ProviderRegistry = providerRegistry,
+            LlmExecution = new GatewayLlmExecutionService(
+                config,
+                providerRegistry,
+                providerPolicies,
+                runtimeEvents,
+                runtimeMetrics,
+                new OpenClaw.Core.Observability.ProviderUsageTracker(),
+                NullLogger<GatewayLlmExecutionService>.Instance),
+            PluginHealth = new PluginHealthService(storagePath, NullLogger<PluginHealthService>.Instance),
+            ApprovalGrants = new ToolApprovalGrantStore(storagePath, NullLogger<ToolApprovalGrantStore>.Instance),
+            RuntimeEvents = runtimeEvents,
+            OperatorAudit = new OperatorAuditStore(storagePath, NullLogger<OperatorAuditStore>.Instance),
+            WebhookDeliveries = new WebhookDeliveryStore(storagePath, NullLogger<WebhookDeliveryStore>.Instance),
+            ActorRateLimits = new ActorRateLimitService(storagePath, NullLogger<ActorRateLimitService>.Instance),
+            SessionMetadata = new SessionMetadataStore(storagePath, NullLogger<SessionMetadataStore>.Instance)
+        };
+
+        using var lifetime = new TestApplicationLifetime();
+        GatewayWorkers.Start(
+            lifetime,
+            NullLogger.Instance,
+            workerCount: 1,
+            isNonLoopbackBind: false,
+            sessionManager,
+            new ConcurrentDictionary<string, SemaphoreSlim>(),
+            new ConcurrentDictionary<string, DateTimeOffset>(),
+            pipeline,
+            middleware,
+            wsChannel,
+            agentRuntime,
+            new Dictionary<string, IChannelAdapter>(StringComparer.Ordinal)
+            {
+                ["cron"] = adapter
+            },
+            config,
+            cronScheduler: null,
+            heartbeatService,
+            toolApprovalService,
+            approvalAuditStore,
+            pairingManager,
+            commandProcessor,
+            operations);
+
+        await pipeline.InboundWriter.WriteAsync(new InboundMessage
+        {
+            IsSystem = true,
+            SessionId = job.SessionId,
+            CronJobName = job.Name,
+            ChannelId = job.ChannelId!,
+            SenderId = job.RecipientId!,
+            Subject = job.Subject,
+            Text = job.Prompt
+        });
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var outbound = await adapter.ReadAsync(timeout.Token);
+        var status = await WaitForHeartbeatStatusAsync(
+            heartbeatService,
+            TimeSpan.FromSeconds(2),
+            static item => item.Outcome == "alert" && item.LastDeliveredAtUtc is not null);
+
+        Assert.Equal("Urgent competitor alert", outbound.Text);
+        Assert.Equal(job.RecipientId, outbound.RecipientId);
+        Assert.Equal("alert", status.Outcome);
+        Assert.False(status.DeliverySuppressed);
+        Assert.Equal("Urgent competitor alert", status.MessagePreview);
+        Assert.NotNull(status.LastDeliveredAtUtc);
+    }
+
+    [Fact]
+    public async Task Start_ManagedHeartbeatAlert_DeliveryFailureDoesNotMarkDelivered()
+    {
+        var storagePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "openclaw-worker-tests", Guid.NewGuid().ToString("N"));
+        var store = new FileMemoryStore(storagePath, 4);
+        var config = new GatewayConfig
+        {
+            Memory = new MemoryConfig
+            {
+                StoragePath = storagePath
+            },
+            Tooling = new ToolingConfig
+            {
+                EnableBrowserTool = false
+            }
+        };
+
+        var sessionManager = new SessionManager(store, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, store, sessionManager, NullLogger<HeartbeatService>.Instance);
+        heartbeatService.SaveConfig(CreateManagedHeartbeatConfig());
+        var job = Assert.IsType<CronJobConfig>(heartbeatService.BuildManagedJob());
+
+        var pipeline = new MessagePipeline();
+        var middleware = new MiddlewarePipeline([]);
+        var wsChannel = new WebSocketChannel(config.WebSocket);
+        await using var adapter = new ThrowingChannelAdapter("cron");
+        var agentRuntime = Substitute.For<IAgentRuntime>();
+        agentRuntime.RunAsync(Arg.Any<Session>(), Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<ToolApprovalCallback?>(), Arg.Any<System.Text.Json.JsonElement?>())
+            .Returns("Urgent competitor alert");
+        var toolApprovalService = new ToolApprovalService();
+        var approvalAuditStore = new ApprovalAuditStore(storagePath, NullLogger<ApprovalAuditStore>.Instance);
+        var pairingManager = new OpenClaw.Core.Security.PairingManager(storagePath, NullLogger<OpenClaw.Core.Security.PairingManager>.Instance);
+        var commandProcessor = new ChatCommandProcessor(sessionManager);
+        var runtimeMetrics = new OpenClaw.Core.Observability.RuntimeMetrics();
+        var providerRegistry = new LlmProviderRegistry();
+        var providerPolicies = new ProviderPolicyService(storagePath, NullLogger<ProviderPolicyService>.Instance);
+        var runtimeEvents = new RuntimeEventStore(storagePath, NullLogger<RuntimeEventStore>.Instance);
+        var operations = new RuntimeOperationsState
+        {
+            ProviderPolicies = providerPolicies,
+            ProviderRegistry = providerRegistry,
+            LlmExecution = new GatewayLlmExecutionService(
+                config,
+                providerRegistry,
+                providerPolicies,
+                runtimeEvents,
+                runtimeMetrics,
+                new OpenClaw.Core.Observability.ProviderUsageTracker(),
+                NullLogger<GatewayLlmExecutionService>.Instance),
+            PluginHealth = new PluginHealthService(storagePath, NullLogger<PluginHealthService>.Instance),
+            ApprovalGrants = new ToolApprovalGrantStore(storagePath, NullLogger<ToolApprovalGrantStore>.Instance),
+            RuntimeEvents = runtimeEvents,
+            OperatorAudit = new OperatorAuditStore(storagePath, NullLogger<OperatorAuditStore>.Instance),
+            WebhookDeliveries = new WebhookDeliveryStore(storagePath, NullLogger<WebhookDeliveryStore>.Instance),
+            ActorRateLimits = new ActorRateLimitService(storagePath, NullLogger<ActorRateLimitService>.Instance),
+            SessionMetadata = new SessionMetadataStore(storagePath, NullLogger<SessionMetadataStore>.Instance)
+        };
+
+        using var lifetime = new TestApplicationLifetime();
+        GatewayWorkers.Start(
+            lifetime,
+            NullLogger.Instance,
+            workerCount: 1,
+            isNonLoopbackBind: false,
+            sessionManager,
+            new ConcurrentDictionary<string, SemaphoreSlim>(),
+            new ConcurrentDictionary<string, DateTimeOffset>(),
+            pipeline,
+            middleware,
+            wsChannel,
+            agentRuntime,
+            new Dictionary<string, IChannelAdapter>(StringComparer.Ordinal)
+            {
+                ["cron"] = adapter
+            },
+            config,
+            cronScheduler: null,
+            heartbeatService,
+            toolApprovalService,
+            approvalAuditStore,
+            pairingManager,
+            commandProcessor,
+            operations);
+
+        await pipeline.InboundWriter.WriteAsync(new InboundMessage
+        {
+            IsSystem = true,
+            SessionId = job.SessionId,
+            CronJobName = job.Name,
+            ChannelId = job.ChannelId!,
+            SenderId = job.RecipientId!,
+            Subject = job.Subject,
+            Text = job.Prompt
+        });
+
+        var status = await WaitForHeartbeatStatusAsync(heartbeatService, TimeSpan.FromSeconds(2), static item => item.Outcome == "alert");
+
+        Assert.False(status.DeliverySuppressed);
+        Assert.Null(status.LastDeliveredAtUtc);
+        Assert.True(adapter.SendAttempts > 0);
+    }
+
+    [Fact]
+    public async Task Start_ManagedHeartbeatError_StaysInternalAndRecordsErrorStatus()
+    {
+        var storagePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "openclaw-worker-tests", Guid.NewGuid().ToString("N"));
+        var store = new FileMemoryStore(storagePath, 4);
+        var config = new GatewayConfig
+        {
+            Memory = new MemoryConfig
+            {
+                StoragePath = storagePath
+            },
+            Tooling = new ToolingConfig
+            {
+                EnableBrowserTool = false
+            }
+        };
+
+        var sessionManager = new SessionManager(store, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, store, sessionManager, NullLogger<HeartbeatService>.Instance);
+        heartbeatService.SaveConfig(CreateManagedHeartbeatConfig());
+        var job = Assert.IsType<CronJobConfig>(heartbeatService.BuildManagedJob());
+
+        var pipeline = new MessagePipeline();
+        var middleware = new MiddlewarePipeline([]);
+        var wsChannel = new WebSocketChannel(config.WebSocket);
+        await using var adapter = new RecordingChannelAdapter("cron");
+        var agentRuntime = Substitute.For<IAgentRuntime>();
+        agentRuntime.RunAsync(Arg.Any<Session>(), Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<ToolApprovalCallback?>(), Arg.Any<System.Text.Json.JsonElement?>())
+            .Returns<Task<string>>(_ => throw new InvalidOperationException("boom"));
+        var toolApprovalService = new ToolApprovalService();
+        var approvalAuditStore = new ApprovalAuditStore(storagePath, NullLogger<ApprovalAuditStore>.Instance);
+        var pairingManager = new OpenClaw.Core.Security.PairingManager(storagePath, NullLogger<OpenClaw.Core.Security.PairingManager>.Instance);
+        var commandProcessor = new ChatCommandProcessor(sessionManager);
+        var runtimeMetrics = new OpenClaw.Core.Observability.RuntimeMetrics();
+        var providerRegistry = new LlmProviderRegistry();
+        var providerPolicies = new ProviderPolicyService(storagePath, NullLogger<ProviderPolicyService>.Instance);
+        var runtimeEvents = new RuntimeEventStore(storagePath, NullLogger<RuntimeEventStore>.Instance);
+        var operations = new RuntimeOperationsState
+        {
+            ProviderPolicies = providerPolicies,
+            ProviderRegistry = providerRegistry,
+            LlmExecution = new GatewayLlmExecutionService(
+                config,
+                providerRegistry,
+                providerPolicies,
+                runtimeEvents,
+                runtimeMetrics,
+                new OpenClaw.Core.Observability.ProviderUsageTracker(),
+                NullLogger<GatewayLlmExecutionService>.Instance),
+            PluginHealth = new PluginHealthService(storagePath, NullLogger<PluginHealthService>.Instance),
+            ApprovalGrants = new ToolApprovalGrantStore(storagePath, NullLogger<ToolApprovalGrantStore>.Instance),
+            RuntimeEvents = runtimeEvents,
+            OperatorAudit = new OperatorAuditStore(storagePath, NullLogger<OperatorAuditStore>.Instance),
+            WebhookDeliveries = new WebhookDeliveryStore(storagePath, NullLogger<WebhookDeliveryStore>.Instance),
+            ActorRateLimits = new ActorRateLimitService(storagePath, NullLogger<ActorRateLimitService>.Instance),
+            SessionMetadata = new SessionMetadataStore(storagePath, NullLogger<SessionMetadataStore>.Instance)
+        };
+
+        using var lifetime = new TestApplicationLifetime();
+        GatewayWorkers.Start(
+            lifetime,
+            NullLogger.Instance,
+            workerCount: 1,
+            isNonLoopbackBind: false,
+            sessionManager,
+            new ConcurrentDictionary<string, SemaphoreSlim>(),
+            new ConcurrentDictionary<string, DateTimeOffset>(),
+            pipeline,
+            middleware,
+            wsChannel,
+            agentRuntime,
+            new Dictionary<string, IChannelAdapter>(StringComparer.Ordinal)
+            {
+                ["cron"] = adapter
+            },
+            config,
+            cronScheduler: null,
+            heartbeatService,
+            toolApprovalService,
+            approvalAuditStore,
+            pairingManager,
+            commandProcessor,
+            operations);
+
+        await pipeline.InboundWriter.WriteAsync(new InboundMessage
+        {
+            IsSystem = true,
+            SessionId = job.SessionId,
+            CronJobName = job.Name,
+            ChannelId = job.ChannelId!,
+            SenderId = job.RecipientId!,
+            Subject = job.Subject,
+            Text = job.Prompt
+        });
+
+        var status = await WaitForHeartbeatStatusAsync(heartbeatService, TimeSpan.FromSeconds(2), static item => item.Outcome == "error");
+        await Task.Delay(150);
+
+        Assert.Equal("error", status.Outcome);
+        Assert.True(status.DeliverySuppressed);
+        Assert.Contains("boom", status.MessagePreview, StringComparison.Ordinal);
+        Assert.False(adapter.TryRead(out _));
+    }
+
+    private static HeartbeatConfigDto CreateManagedHeartbeatConfig()
+        => new()
+        {
+            Enabled = true,
+            CronExpression = "@hourly",
+            Timezone = "UTC",
+            DeliveryChannelId = "cron",
+            Tasks =
+            [
+                new HeartbeatTaskDto
+                {
+                    Id = "watch-critical-inputs",
+                    TemplateKey = "custom",
+                    Title = "Watch critical inputs",
+                    Instruction = "Only notify on urgent changes."
+                }
+            ]
+        };
+
+    private static async Task<HeartbeatRunStatusDto> WaitForHeartbeatStatusAsync(
+        HeartbeatService heartbeatService,
+        TimeSpan timeout,
+        Func<HeartbeatRunStatusDto, bool>? predicate = null)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            var status = heartbeatService.LoadStatus();
+            if (status is not null && (predicate is null || predicate(status)))
+                return status;
+
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException("Timed out waiting for managed heartbeat status.");
+    }
+
     private sealed class TestApplicationLifetime : IHostApplicationLifetime, IDisposable
     {
         private readonly CancellationTokenSource _stopping = new();
@@ -346,5 +836,61 @@ public sealed class GatewayWorkersTests
         public void StopApplication() => _stopping.Cancel();
 
         public void Dispose() => _stopping.Cancel();
+    }
+
+    private sealed class RecordingChannelAdapter(string channelId) : IChannelAdapter
+    {
+        private readonly Channel<OutboundMessage> _messages = Channel.CreateUnbounded<OutboundMessage>();
+
+        public string ChannelId { get; } = channelId;
+
+        public event Func<InboundMessage, CancellationToken, ValueTask> OnMessageReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+
+        public ValueTask SendAsync(OutboundMessage message, CancellationToken ct)
+            => _messages.Writer.WriteAsync(message, ct);
+
+        public ValueTask DisposeAsync()
+        {
+            _messages.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<OutboundMessage> ReadAsync(CancellationToken ct)
+            => _messages.Reader.ReadAsync(ct);
+
+        public bool TryRead(out OutboundMessage? message)
+        {
+            var success = _messages.Reader.TryRead(out var captured);
+            message = captured;
+            return success;
+        }
+    }
+
+    private sealed class ThrowingChannelAdapter(string channelId) : IChannelAdapter
+    {
+        public string ChannelId { get; } = channelId;
+        public int SendAttempts { get; private set; }
+
+        public event Func<InboundMessage, CancellationToken, ValueTask> OnMessageReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+
+        public ValueTask SendAsync(OutboundMessage message, CancellationToken ct)
+        {
+            SendAttempts++;
+            throw new InvalidOperationException("simulated delivery failure");
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

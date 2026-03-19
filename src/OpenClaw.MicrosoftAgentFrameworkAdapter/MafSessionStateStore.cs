@@ -108,12 +108,27 @@ public sealed class MafSessionStateStore
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         var tempPath = path + ".tmp";
-        await using (var stream = File.Create(tempPath))
+        try
         {
-            await JsonSerializer.SerializeAsync(stream, envelope, MafJsonContext.Default.MafSessionEnvelope, ct);
-        }
+            await using (var stream = File.Create(tempPath))
+            {
+                await JsonSerializer.SerializeAsync(stream, envelope, MafJsonContext.Default.MafSessionEnvelope, ct);
+            }
 
-        File.Move(tempPath, path, overwrite: true);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
+            catch
+            {
+                // Best-effort cleanup only.
+            }
+        }
     }
 
     internal string GetSessionPath(string sessionId)

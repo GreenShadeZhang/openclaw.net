@@ -280,6 +280,15 @@ public sealed class WebSocketChannel : IChannelAdapter
             {
                 // ignore
             }
+
+            try
+            {
+                kvp.Value.SendLock.Dispose();
+            }
+            catch
+            {
+                // ignore
+            }
         }
 
         _connections.Clear();
@@ -319,6 +328,7 @@ public sealed class WebSocketChannel : IChannelAdapter
         {
             _connectionsPerIp.AddOrUpdate(state.IpKey, 0, (_, c) => Math.Max(0, c - 1));
             Interlocked.Decrement(ref _connectionCount);
+            state.SendLock.Dispose();
             return false;
         }
 
@@ -326,6 +336,7 @@ public sealed class WebSocketChannel : IChannelAdapter
         {
             _connectionsPerIp.AddOrUpdate(state.IpKey, 0, (_, c) => Math.Max(0, c - 1));
             Interlocked.Decrement(ref _connectionCount);
+            state.SendLock.Dispose();
             return false;
         }
 
@@ -338,6 +349,7 @@ public sealed class WebSocketChannel : IChannelAdapter
             Interlocked.Decrement(ref _connectionCount);
         _connectionsPerIp.AddOrUpdate(state.IpKey, 0, (_, c) => Math.Max(0, c - 1));
         try { state.Socket.Dispose(); } catch { /* ignore */ }
+        try { state.SendLock.Dispose(); } catch { /* ignore */ }
     }
 
     private async Task<string?> ReceiveFullTextMessageAsync(WebSocket ws, CancellationToken ct)

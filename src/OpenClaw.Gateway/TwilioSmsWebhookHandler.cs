@@ -8,6 +8,8 @@ namespace OpenClaw.Gateway;
 
 internal sealed class TwilioSmsWebhookHandler
 {
+    private const int PruneInterval = 64;
+
     private readonly TwilioSmsConfig _config;
     private readonly string _twilioAuthToken;
     private readonly IContactStore _contacts;
@@ -15,12 +17,14 @@ internal sealed class TwilioSmsWebhookHandler
     private readonly RecentSendersStore _recentSenders;
     private readonly AllowlistSemantics _allowlistSemantics;
     private readonly ConcurrentDictionary<string, RateWindow> _rate = new(StringComparer.Ordinal);
+    private long _pruneCounter;
 
     private sealed class RateWindow
     {
         private readonly int _limit;
         private readonly Lock _lock = new();
         private long _windowMinute;
+        private long _lastSeenMinute;
         private int _count;
 
         public RateWindow(int limit) => _limit = Math.Max(1, limit);
@@ -36,11 +40,22 @@ internal sealed class TwilioSmsWebhookHandler
                     _count = 0;
                 }
 
+                _lastSeenMinute = minute;
                 _count++;
                 return _count <= _limit;
             }
         }
+
+        public bool IsStale(long currentMinute)
+        {
+            lock (_lock)
+            {
+                return _lastSeenMinute != 0 && currentMinute - _lastSeenMinute > 2;
+            }
+        }
     }
+
+    internal int ActiveRateWindowCount => _rate.Count;
 
     public TwilioSmsWebhookHandler(
         TwilioSmsConfig config,
@@ -107,6 +122,7 @@ internal sealed class TwilioSmsWebhookHandler
             return WebhookResult.Unauthorized();
         }
 
+        MaybePruneRateWindows();
         var limiter = _rate.GetOrAdd(from, _ => new RateWindow(_config.RateLimitPerFromPerMinute));
         if (!limiter.TryConsume())
             return WebhookResult.Status(429);
@@ -191,6 +207,23 @@ internal sealed class TwilioSmsWebhookHandler
 
     private static bool IsHelpKeyword(string keyword) =>
         keyword is "HELP" or "INFO";
+
+    private void MaybePruneRateWindows()
+    {
+        if (Interlocked.Increment(ref _pruneCounter) % PruneInterval != 0)
+            return;
+
+        PruneStaleRateWindows(DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60);
+    }
+
+    internal void PruneStaleRateWindows(long currentMinute)
+    {
+        foreach (var entry in _rate)
+        {
+            if (entry.Value.IsStale(currentMinute))
+                _rate.TryRemove(entry.Key, out _);
+        }
+    }
 }
 
 internal readonly record struct WebhookResult(int StatusCode, string? ContentType, string? Body)

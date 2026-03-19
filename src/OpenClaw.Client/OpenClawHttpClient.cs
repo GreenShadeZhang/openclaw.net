@@ -22,6 +22,9 @@ public sealed class OpenClawHttpClient : IDisposable
     private readonly Uri _integrationSessionsUri;
     private readonly Uri _integrationRuntimeEventsUri;
     private readonly Uri _integrationMessagesUri;
+    private readonly Uri _adminHeartbeatUri;
+    private readonly Uri _adminHeartbeatPreviewUri;
+    private readonly Uri _adminHeartbeatStatusUri;
     private long _mcpRequestId;
 
     public OpenClawHttpClient(string baseUrl, string? authToken, HttpClient? httpClient = null)
@@ -45,6 +48,9 @@ public sealed class OpenClawHttpClient : IDisposable
         _integrationSessionsUri = new Uri(baseUri, "/api/integration/sessions");
         _integrationRuntimeEventsUri = new Uri(baseUri, "/api/integration/runtime-events");
         _integrationMessagesUri = new Uri(baseUri, "/api/integration/messages");
+        _adminHeartbeatUri = new Uri(baseUri, "/admin/heartbeat");
+        _adminHeartbeatPreviewUri = new Uri(baseUri, "/admin/heartbeat/preview");
+        _adminHeartbeatStatusUri = new Uri(baseUri, "/admin/heartbeat/status");
 
         _http = httpClient ?? new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         _ownsHttpClient = httpClient is null;
@@ -251,6 +257,36 @@ public sealed class OpenClawHttpClient : IDisposable
 
         return await SendAsync(req, CoreJsonContext.Default.IntegrationMessageResponse, cancellationToken);
     }
+
+    public Task<HeartbeatPreviewResponse> GetHeartbeatAsync(CancellationToken cancellationToken)
+        => GetAsync(_adminHeartbeatUri, CoreJsonContext.Default.HeartbeatPreviewResponse, cancellationToken);
+
+    public async Task<HeartbeatPreviewResponse> PreviewHeartbeatAsync(
+        HeartbeatConfigDto request,
+        CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, _adminHeartbeatPreviewUri)
+        {
+            Content = BuildJsonContent(request, CoreJsonContext.Default.HeartbeatConfigDto)
+        };
+
+        return await SendAsync(req, CoreJsonContext.Default.HeartbeatPreviewResponse, cancellationToken);
+    }
+
+    public async Task<HeartbeatPreviewResponse> SaveHeartbeatAsync(
+        HeartbeatConfigDto request,
+        CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Put, _adminHeartbeatUri)
+        {
+            Content = BuildJsonContent(request, CoreJsonContext.Default.HeartbeatConfigDto)
+        };
+
+        return await SendAsync(req, CoreJsonContext.Default.HeartbeatPreviewResponse, cancellationToken);
+    }
+
+    public Task<HeartbeatStatusResponse> GetHeartbeatStatusAsync(CancellationToken cancellationToken)
+        => GetAsync(_adminHeartbeatStatusUri, CoreJsonContext.Default.HeartbeatStatusResponse, cancellationToken);
 
     private async Task<T> GetAsync<T>(Uri uri, JsonTypeInfo<T> jsonTypeInfo, CancellationToken cancellationToken)
     {

@@ -154,17 +154,10 @@ public sealed class OpenSandboxToolSandbox : IToolSandbox, IAsyncDisposable
             {
                 return existing;
             }
-        }
-        finally
-        {
-            _leaseGate.Release();
-        }
 
-        var created = await CreateLeaseAsync(template, ttl, leaseKey, cancellationToken);
-
-        await _leaseGate.WaitAsync(cancellationToken);
-        try
-        {
+            // Keep the lease gate held while provisioning so only one sandbox is created
+            // for a given lease key at a time.
+            var created = await CreateLeaseAsync(template, ttl, leaseKey, cancellationToken);
             _leases[leaseKey] = created;
             return created;
         }

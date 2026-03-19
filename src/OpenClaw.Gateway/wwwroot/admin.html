@@ -295,6 +295,33 @@
             color: var(--text);
             word-break: break-word;
         }
+
+        .task-list {
+            display: grid;
+            gap: 0.8rem;
+            margin-top: 0.8rem;
+        }
+
+        .task-card, .task-condition {
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 0.8rem;
+            background: rgba(15, 23, 42, 0.55);
+        }
+
+        .task-condition {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 0.6rem;
+            align-items: end;
+        }
+
+        .task-meta {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.6rem;
+        }
     </style>
 </head>
 <body>
@@ -316,6 +343,7 @@
 
     <nav class="section-nav">
         <a href="#overview-section">Overview</a>
+        <a href="#heartbeat-section">Heartbeat</a>
         <a href="#integration-section">Integration</a>
         <a href="#ops-section">Ops</a>
         <a href="#sessions-section">Sessions</a>
@@ -362,6 +390,70 @@
                     <button id="integration-message-send-button">Send Message</button>
                 </div>
                 <pre id="integration-message-output">Ready.</pre>
+            </div>
+        </section>
+
+        <section id="heartbeat-section" class="grid">
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Heartbeat Wizard</h2>
+                        <div class="muted">Managed heartbeat config backed by the gateway and rendered to HEARTBEAT.md.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="heartbeat-reload-button" class="secondary">Reload</button>
+                        <button id="heartbeat-preview-button" class="secondary">Preview</button>
+                        <button id="heartbeat-save-button">Save Heartbeat</button>
+                    </div>
+                </div>
+                <div class="settings-grid">
+                    <div class="field checkbox">
+                        <input id="heartbeat-enabled-input" type="checkbox">
+                        <label for="heartbeat-enabled-input">Enable managed heartbeat</label>
+                    </div>
+                    <div class="field">
+                        <label for="heartbeat-cron-input">Cron expression</label>
+                        <input id="heartbeat-cron-input" type="text" placeholder="@hourly">
+                    </div>
+                    <div class="field">
+                        <label for="heartbeat-timezone-input">Timezone</label>
+                        <input id="heartbeat-timezone-input" type="text" placeholder="UTC">
+                    </div>
+                    <div class="field">
+                        <label for="heartbeat-channel-input">Delivery channel</label>
+                        <select id="heartbeat-channel-input">
+                            <option value="cron">Cron log only</option>
+                            <option value="email">Email</option>
+                            <option value="sms">SMS</option>
+                            <option value="telegram">Telegram</option>
+                            <option value="whatsapp">WhatsApp</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="heartbeat-recipient-input">Delivery recipient</label>
+                        <input id="heartbeat-recipient-input" type="text" placeholder="you@example.com or chat id">
+                    </div>
+                    <div class="field">
+                        <label for="heartbeat-subject-input">Delivery subject</label>
+                        <input id="heartbeat-subject-input" type="text" placeholder="OpenClaw Heartbeat">
+                    </div>
+                    <div class="field">
+                        <label for="heartbeat-model-input">Model override</label>
+                        <input id="heartbeat-model-input" type="text" placeholder="Optional">
+                    </div>
+                </div>
+                <h3 style="margin-top:1rem;">Templates</h3>
+                <div id="heartbeat-templates" class="pill-row muted">Loading…</div>
+                <h3 style="margin-top:1rem;">Suggestions</h3>
+                <div id="heartbeat-suggestions" class="muted">Loading…</div>
+                <h3 style="margin-top:1rem;">Tasks</h3>
+                <div id="heartbeat-tasks" class="task-list"></div>
+            </div>
+            <div class="card">
+                <h2>Heartbeat Status</h2>
+                <pre id="heartbeat-status-output">Loading…</pre>
+                <h3 style="margin-top:1rem;">Generated HEARTBEAT.md</h3>
+                <pre id="heartbeat-preview-output">Loading…</pre>
             </div>
         </section>
 
@@ -740,6 +832,20 @@
         const sessionTagsInput = document.getElementById('session-tags-input');
         const pairingOutput = document.getElementById('pairing-output');
         const allowlistsOutput = document.getElementById('allowlists-output');
+        const heartbeatTemplates = document.getElementById('heartbeat-templates');
+        const heartbeatSuggestions = document.getElementById('heartbeat-suggestions');
+        const heartbeatTasks = document.getElementById('heartbeat-tasks');
+        const heartbeatStatusOutput = document.getElementById('heartbeat-status-output');
+        const heartbeatPreviewOutput = document.getElementById('heartbeat-preview-output');
+        const heartbeatInputs = {
+            enabled: document.getElementById('heartbeat-enabled-input'),
+            cronExpression: document.getElementById('heartbeat-cron-input'),
+            timezone: document.getElementById('heartbeat-timezone-input'),
+            deliveryChannelId: document.getElementById('heartbeat-channel-input'),
+            deliveryRecipientId: document.getElementById('heartbeat-recipient-input'),
+            deliverySubject: document.getElementById('heartbeat-subject-input'),
+            modelId: document.getElementById('heartbeat-model-input')
+        };
         const settingsStatus = document.getElementById('settings-status');
         const settingsPersistence = document.getElementById('settings-persistence');
         const settingsRestartFields = document.getElementById('settings-restart-fields');
@@ -797,6 +903,7 @@
             selectedSessionId: null
         };
         let settingsState = null;
+        let heartbeatState = null;
         let approvalsPollTimer = null;
 
         async function api(url, options = {}) {
@@ -918,6 +1025,15 @@
         function toInt(value, fallback = 0) {
             const parsed = Number.parseInt(value, 10);
             return Number.isFinite(parsed) ? parsed : fallback;
+        }
+
+        function createLabeledField(labelText, control, className = 'field') {
+            const wrapper = document.createElement('div');
+            wrapper.className = className;
+            const label = document.createElement('label');
+            label.textContent = labelText;
+            wrapper.append(label, control);
+            return wrapper;
         }
 
         function renderApplyBadges(payload) {
@@ -1062,6 +1178,373 @@
                 whatsappValidateSignature: settingsInputs.whatsappValidateSignature.checked,
                 whatsappDmPolicy: settingsInputs.whatsappDmPolicy.value
             };
+        }
+
+        function createConditionRow(condition = {}) {
+            const row = document.createElement('div');
+            row.className = 'task-condition';
+
+            const fieldInput = document.createElement('input');
+            fieldInput.type = 'text';
+            fieldInput.dataset.conditionField = 'field';
+            fieldInput.placeholder = 'subject';
+            fieldInput.value = condition.field || '';
+
+            const operatorSelect = document.createElement('select');
+            operatorSelect.dataset.conditionField = 'operator';
+            ['contains', 'equals', 'any_of', 'is_true'].forEach(optionValue => {
+                const option = document.createElement('option');
+                option.value = optionValue;
+                option.textContent = optionValue;
+                operatorSelect.appendChild(option);
+            });
+            operatorSelect.value = condition.operator || 'contains';
+
+            const valuesInput = document.createElement('input');
+            valuesInput.type = 'text';
+            valuesInput.dataset.conditionField = 'values';
+            valuesInput.placeholder = 'VIP, URGENT';
+            valuesInput.value = Array.isArray(condition.values) ? condition.values.join(', ') : '';
+
+            const actions = document.createElement('div');
+            actions.className = 'actions';
+            const removeButton = document.createElement('button');
+            removeButton.type = 'button';
+            removeButton.className = 'secondary';
+            removeButton.dataset.conditionRemove = '';
+            removeButton.textContent = 'Remove';
+            actions.appendChild(removeButton);
+
+            row.append(
+                createLabeledField('Field', fieldInput),
+                createLabeledField('Operator', operatorSelect),
+                createLabeledField('Values', valuesInput),
+                actions
+            );
+            return row;
+        }
+
+        function createTaskCard(task = {}, templateLabel = null) {
+            const card = document.createElement('div');
+            card.className = 'task-card';
+            card.dataset.taskId = task.id || `task-${Math.random().toString(36).slice(2, 10)}`;
+            card.dataset.templateKey = task.templateKey || 'custom';
+            const label = templateLabel || task.templateKey || 'custom';
+
+            const sectionTitle = document.createElement('div');
+            sectionTitle.className = 'section-title';
+
+            const titleBlock = document.createElement('div');
+            const strong = document.createElement('strong');
+            strong.textContent = label;
+            const meta = document.createElement('div');
+            meta.className = 'task-meta';
+            const idPill = document.createElement('span');
+            idPill.className = 'pill';
+            idPill.textContent = `id: ${card.dataset.taskId}`;
+            const templatePill = document.createElement('span');
+            templatePill.className = 'pill';
+            templatePill.textContent = `template: ${card.dataset.templateKey}`;
+            meta.append(idPill, templatePill);
+            titleBlock.append(strong, meta);
+
+            const headerActions = document.createElement('div');
+            headerActions.className = 'actions';
+            const removeButton = document.createElement('button');
+            removeButton.type = 'button';
+            removeButton.className = 'secondary';
+            removeButton.dataset.taskRemove = '';
+            removeButton.textContent = 'Remove';
+            headerActions.appendChild(removeButton);
+            sectionTitle.append(titleBlock, headerActions);
+
+            const settingsGrid = document.createElement('div');
+            settingsGrid.className = 'settings-grid';
+
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.dataset.taskField = 'title';
+            titleInput.placeholder = 'Task title';
+            titleInput.value = task.title || '';
+
+            const targetInput = document.createElement('input');
+            targetInput.type = 'text';
+            targetInput.dataset.taskField = 'target';
+            targetInput.placeholder = 'URL, sender, path, query';
+            targetInput.value = task.target || '';
+
+            const prioritySelect = document.createElement('select');
+            prioritySelect.dataset.taskField = 'priority';
+            [['low', 'Low'], ['normal', 'Normal'], ['high', 'High']].forEach(([value, text]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = text;
+                prioritySelect.appendChild(option);
+            });
+            prioritySelect.value = task.priority || 'normal';
+
+            const conditionModeSelect = document.createElement('select');
+            conditionModeSelect.dataset.taskField = 'conditionMode';
+            [['and', 'AND'], ['or', 'OR']].forEach(([value, text]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = text;
+                conditionModeSelect.appendChild(option);
+            });
+            conditionModeSelect.value = task.conditionMode || 'and';
+
+            const enabledField = document.createElement('div');
+            enabledField.className = 'field checkbox';
+            const enabledInput = document.createElement('input');
+            enabledInput.type = 'checkbox';
+            enabledInput.dataset.taskField = 'enabled';
+            enabledInput.checked = task.enabled !== false;
+            const enabledLabel = document.createElement('label');
+            enabledLabel.textContent = 'Enabled';
+            enabledField.append(enabledInput, enabledLabel);
+
+            const instructionField = document.createElement('div');
+            instructionField.className = 'field';
+            instructionField.style.gridColumn = '1 / -1';
+            const instructionLabel = document.createElement('label');
+            instructionLabel.textContent = 'Instruction';
+            const instructionInput = document.createElement('textarea');
+            instructionInput.rows = 3;
+            instructionInput.dataset.taskField = 'instruction';
+            instructionInput.placeholder = 'Optional extra instruction';
+            instructionInput.value = task.instruction || '';
+            instructionField.append(instructionLabel, instructionInput);
+
+            settingsGrid.append(
+                createLabeledField('Title', titleInput),
+                createLabeledField('Target', targetInput),
+                createLabeledField('Priority', prioritySelect),
+                createLabeledField('Condition mode', conditionModeSelect),
+                enabledField,
+                instructionField
+            );
+
+            const conditionsHost = document.createElement('div');
+            conditionsHost.className = 'task-list';
+            conditionsHost.dataset.taskConditions = '';
+            (task.conditions || []).forEach(condition => conditionsHost.appendChild(createConditionRow(condition)));
+
+            const addConditionActions = document.createElement('div');
+            addConditionActions.className = 'actions';
+            addConditionActions.style.marginTop = '0.75rem';
+            const addConditionButton = document.createElement('button');
+            addConditionButton.type = 'button';
+            addConditionButton.className = 'secondary';
+            addConditionButton.dataset.taskAddCondition = '';
+            addConditionButton.textContent = 'Add Condition';
+            addConditionActions.appendChild(addConditionButton);
+
+            card.append(sectionTitle, settingsGrid, conditionsHost, addConditionActions);
+            return card;
+        }
+
+        function renderHeartbeatTemplates(templates) {
+            if (!templates || !templates.length) {
+                heartbeatTemplates.textContent = 'No templates available.';
+                return;
+            }
+
+            heartbeatTemplates.replaceChildren();
+            templates.forEach(template => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.dataset.heartbeatTemplate = template.key;
+                button.textContent = template.label;
+                if (!template.available) {
+                    button.className = 'secondary';
+                    button.disabled = true;
+                    if (template.reason)
+                        button.title = template.reason;
+                }
+                heartbeatTemplates.appendChild(button);
+            });
+        }
+
+        function renderHeartbeatSuggestions(items) {
+            if (!items || !items.length) {
+                heartbeatSuggestions.textContent = 'No heartbeat suggestions yet.';
+                return;
+            }
+
+            heartbeatSuggestions.replaceChildren();
+            items.forEach((item, index) => {
+                const card = document.createElement('div');
+                card.className = 'task-card';
+                card.style.marginTop = '0.75rem';
+
+                const title = document.createElement('strong');
+                title.textContent = item.title;
+
+                const reason = document.createElement('div');
+                reason.className = 'muted';
+                reason.textContent = item.reason;
+
+                const meta = document.createElement('div');
+                meta.className = 'muted';
+                meta.textContent = `template=${item.templateKey} · target=${item.target || '(none)'}`;
+
+                const actions = document.createElement('div');
+                actions.className = 'actions';
+                actions.style.marginTop = '0.75rem';
+                const addButton = document.createElement('button');
+                addButton.type = 'button';
+                addButton.dataset.heartbeatSuggestionIndex = String(index);
+                addButton.textContent = 'Add Suggestion';
+                actions.appendChild(addButton);
+
+                card.append(title, reason, meta, actions);
+                heartbeatSuggestions.appendChild(card);
+            });
+        }
+
+        function renderHeartbeatTasks(tasks, templates) {
+            heartbeatTasks.innerHTML = '';
+            const labels = new Map((templates || []).map(template => [template.key, template.label]));
+            if (!tasks || !tasks.length) {
+                heartbeatTasks.innerHTML = '<div class="task-card"><strong>No tasks yet.</strong><div class="muted">Add one from the templates or suggestions above.</div></div>';
+                return;
+            }
+
+            tasks.forEach(task => {
+                heartbeatTasks.appendChild(createTaskCard(task, labels.get(task.templateKey)));
+            });
+        }
+
+        function collectHeartbeatForm() {
+            return {
+                enabled: heartbeatInputs.enabled.checked,
+                cronExpression: heartbeatInputs.cronExpression.value.trim() || '@hourly',
+                timezone: heartbeatInputs.timezone.value.trim() || 'UTC',
+                deliveryChannelId: heartbeatInputs.deliveryChannelId.value,
+                deliveryRecipientId: heartbeatInputs.deliveryRecipientId.value.trim() || null,
+                deliverySubject: heartbeatInputs.deliverySubject.value.trim() || null,
+                modelId: heartbeatInputs.modelId.value.trim() || null,
+                tasks: Array.from(heartbeatTasks.querySelectorAll('.task-card[data-task-id]')).map(card => ({
+                    id: card.dataset.taskId,
+                    templateKey: card.dataset.templateKey,
+                    title: card.querySelector('[data-task-field="title"]').value.trim(),
+                    target: card.querySelector('[data-task-field="target"]').value.trim() || null,
+                    instruction: card.querySelector('[data-task-field="instruction"]').value.trim() || null,
+                    priority: card.querySelector('[data-task-field="priority"]').value,
+                    enabled: card.querySelector('[data-task-field="enabled"]').checked,
+                    conditionMode: card.querySelector('[data-task-field="conditionMode"]').value,
+                    conditions: Array.from(card.querySelectorAll('.task-condition')).map(row => ({
+                        field: row.querySelector('[data-condition-field="field"]').value.trim(),
+                        operator: row.querySelector('[data-condition-field="operator"]').value,
+                        values: row.querySelector('[data-condition-field="values"]').value
+                            .split(',')
+                            .map(value => value.trim())
+                            .filter(Boolean)
+                    }))
+                }))
+            };
+        }
+
+        function applyHeartbeatPreview(preview, status = null) {
+            heartbeatState = {
+                preview,
+                status
+            };
+
+            heartbeatInputs.enabled.checked = Boolean(preview.config.enabled);
+            heartbeatInputs.cronExpression.value = preview.config.cronExpression || '@hourly';
+            heartbeatInputs.timezone.value = preview.config.timezone || 'UTC';
+            heartbeatInputs.deliveryChannelId.value = preview.config.deliveryChannelId || 'cron';
+            heartbeatInputs.deliveryRecipientId.value = preview.config.deliveryRecipientId || '';
+            heartbeatInputs.deliverySubject.value = preview.config.deliverySubject || '';
+            heartbeatInputs.modelId.value = preview.config.modelId || '';
+
+            renderHeartbeatTemplates(preview.availableTemplates || []);
+            renderHeartbeatSuggestions(preview.suggestions || []);
+            renderHeartbeatTasks(preview.config.tasks || [], preview.availableTemplates || []);
+
+            const issues = (preview.issues || []).map(issue => `- ${issue.severity}: ${issue.message}`).join('\n') || '- none';
+            const lastRun = status?.lastRun
+                ? `last_run: ${status.lastRun.lastRunAtUtc}\noutcome: ${status.lastRun.outcome}\nsuppressed: ${status.lastRun.deliverySuppressed}\ntokens: in ${status.lastRun.inputTokens} / out ${status.lastRun.outputTokens}\npreview: ${status.lastRun.messagePreview || '(none)'}`
+                : 'last_run: never';
+            heartbeatStatusOutput.textContent = [
+                `config_path: ${preview.configPath}`,
+                `heartbeat_path: ${preview.heartbeatPath}`,
+                `memory_md_path: ${preview.memoryMarkdownPath}`,
+                `managed_job_active: ${preview.managedJobActive}`,
+                `drift_detected: ${preview.driftDetected}`,
+                `estimate_model: ${preview.costEstimate.providerId}:${preview.costEstimate.modelId}`,
+                `estimate_input_tokens_per_run: ${preview.costEstimate.estimatedInputTokensPerRun}`,
+                `estimate_runs_per_month: ${preview.costEstimate.estimatedRunsPerMonth}`,
+                `estimate_ok_cost_per_month: $${Number(preview.costEstimate.estimatedOkCostUsdPerMonth || 0).toFixed(4)}`,
+                `estimate_alert_cost_per_month: $${Number(preview.costEstimate.estimatedAlertCostUsdPerMonth || 0).toFixed(4)}`,
+                '',
+                'issues:',
+                issues,
+                '',
+                lastRun
+            ].join('\n');
+
+            heartbeatPreviewOutput.textContent = preview.heartbeatMarkdown || 'No generated HEARTBEAT.md.';
+        }
+
+        async function loadHeartbeat() {
+            const [previewResult, statusResult] = await Promise.all([
+                api('/admin/heartbeat'),
+                api('/admin/heartbeat/status')
+            ]);
+
+            if (!previewResult.resp.ok) {
+                heartbeatStatusOutput.textContent = `Heartbeat request failed (${previewResult.resp.status})`;
+                heartbeatPreviewOutput.textContent = `Heartbeat request failed (${previewResult.resp.status})`;
+                heartbeatTemplates.textContent = 'Heartbeat unavailable.';
+                heartbeatSuggestions.textContent = 'Heartbeat unavailable.';
+                heartbeatTasks.innerHTML = '';
+                return;
+            }
+
+            applyHeartbeatPreview(previewResult.data, statusResult.resp.ok ? statusResult.data : null);
+        }
+
+        async function previewHeartbeat() {
+            const payload = collectHeartbeatForm();
+            const { resp, data } = await mutate('/admin/heartbeat/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!resp.ok) {
+                showFlash(`Heartbeat preview failed (${resp.status}).`, 'error');
+                if (data?.heartbeatMarkdown || data?.config) {
+                    applyHeartbeatPreview(data, heartbeatState?.status || null);
+                }
+                return;
+            }
+
+            applyHeartbeatPreview(data, heartbeatState?.status || null);
+            showFlash('Heartbeat preview updated.', 'ok');
+        }
+
+        async function saveHeartbeat() {
+            const payload = collectHeartbeatForm();
+            const { resp, data } = await mutate('/admin/heartbeat', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!resp.ok) {
+                if (data?.heartbeatMarkdown || data?.config) {
+                    applyHeartbeatPreview(data, heartbeatState?.status || null);
+                }
+                showFlash(`Heartbeat save failed (${resp.status}).`, 'error');
+                return;
+            }
+
+            applyHeartbeatPreview(data, heartbeatState?.status || null);
+            showFlash('Heartbeat saved.', 'ok');
+            await loadSummary();
         }
 
         async function loadSummary() {
@@ -1419,6 +1902,11 @@
                 sessionsOutput.textContent = 'Login required.';
                 pairingOutput.textContent = 'Login required.';
                 allowlistsOutput.textContent = 'Login required.';
+                heartbeatStatusOutput.textContent = 'Login required.';
+                heartbeatPreviewOutput.textContent = 'Login required.';
+                heartbeatTemplates.textContent = 'Login required.';
+                heartbeatSuggestions.textContent = 'Login required.';
+                heartbeatTasks.innerHTML = '';
                 settingsStatus.textContent = 'Login required.';
                 settingsPersistence.textContent = '';
                 settingsRestartFields.innerHTML = '<li>Login required.</li>';
@@ -1445,6 +1933,7 @@
                 loadDeadLetter(),
                 loadRateLimits(),
                 loadSessions(),
+                loadHeartbeat(),
                 loadSettings(),
                 loadPairing(),
                 loadAllowlists()
@@ -1650,6 +2139,14 @@
             showFlash('Settings reloaded from the server.', 'ok');
         });
 
+        document.getElementById('heartbeat-reload-button').addEventListener('click', async () => {
+            await loadHeartbeat();
+            showFlash('Heartbeat reloaded from the server.', 'ok');
+        });
+
+        document.getElementById('heartbeat-preview-button').addEventListener('click', previewHeartbeat);
+        document.getElementById('heartbeat-save-button').addEventListener('click', saveHeartbeat);
+
         document.getElementById('settings-save-button').addEventListener('click', async () => {
             const payload = collectSettingsForm();
             const { resp, data } = await mutate('/admin/settings', {
@@ -1670,6 +2167,65 @@
             showFlash(data.message || 'Settings saved.', data.restartRequired ? 'warn' : 'ok');
             await loadSummary();
             await loadDoctor();
+        });
+
+        heartbeatTemplates.addEventListener('click', event => {
+            const button = event.target.closest('button[data-heartbeat-template]');
+            if (!button) return;
+            const key = button.getAttribute('data-heartbeat-template');
+            const template = (heartbeatState?.preview?.availableTemplates || []).find(item => item.key === key);
+            heartbeatTasks.appendChild(createTaskCard({
+                templateKey: key,
+                title: template?.label || 'New task',
+                enabled: true,
+                priority: 'normal',
+                conditionMode: 'and',
+                conditions: []
+            }, template?.label));
+        });
+
+        heartbeatSuggestions.addEventListener('click', event => {
+            const button = event.target.closest('button[data-heartbeat-suggestion-index]');
+            if (!button) return;
+            const index = Number.parseInt(button.getAttribute('data-heartbeat-suggestion-index') || '', 10);
+            if (!Number.isFinite(index)) return;
+            const suggestion = (heartbeatState?.preview?.suggestions || [])[index];
+            if (!suggestion) return;
+            const template = (heartbeatState?.preview?.availableTemplates || []).find(item => item.key === suggestion.templateKey);
+            heartbeatTasks.appendChild(createTaskCard({
+                templateKey: suggestion.templateKey,
+                title: suggestion.title,
+                target: suggestion.target,
+                instruction: suggestion.reason,
+                enabled: true,
+                priority: 'normal',
+                conditionMode: 'and',
+                conditions: []
+            }, template?.label));
+        });
+
+        heartbeatTasks.addEventListener('click', event => {
+            const removeTask = event.target.closest('button[data-task-remove]');
+            if (removeTask) {
+                removeTask.closest('.task-card')?.remove();
+                if (!heartbeatTasks.querySelector('.task-card[data-task-id]')) {
+                    renderHeartbeatTasks([], heartbeatState?.preview?.availableTemplates || []);
+                }
+                return;
+            }
+
+            const addCondition = event.target.closest('button[data-task-add-condition]');
+            if (addCondition) {
+                const card = addCondition.closest('.task-card');
+                const host = card?.querySelector('[data-task-conditions]');
+                host?.appendChild(createConditionRow());
+                return;
+            }
+
+            const removeCondition = event.target.closest('button[data-condition-remove]');
+            if (removeCondition) {
+                removeCondition.closest('.task-condition')?.remove();
+            }
         });
 
         document.getElementById('settings-reset-button').addEventListener('click', async () => {

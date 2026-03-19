@@ -20,5 +20,17 @@ internal sealed class OpenClawHttpClient : IDisposable
         CancellationToken cancellationToken)
         => await _inner.StreamChatCompletionAsync(request, onText, cancellationToken);
 
+    public Task<HeartbeatPreviewResponse> GetHeartbeatAsync(CancellationToken cancellationToken)
+        => _inner.GetHeartbeatAsync(cancellationToken);
+
+    public Task<HeartbeatPreviewResponse> PreviewHeartbeatAsync(HeartbeatConfigDto request, CancellationToken cancellationToken)
+        => _inner.PreviewHeartbeatAsync(request, cancellationToken);
+
+    public Task<HeartbeatPreviewResponse> SaveHeartbeatAsync(HeartbeatConfigDto request, CancellationToken cancellationToken)
+        => _inner.SaveHeartbeatAsync(request, cancellationToken);
+
+    public Task<HeartbeatStatusResponse> GetHeartbeatStatusAsync(CancellationToken cancellationToken)
+        => _inner.GetHeartbeatStatusAsync(cancellationToken);
+
     public void Dispose() => _inner.Dispose();
 }

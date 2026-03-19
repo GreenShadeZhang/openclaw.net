@@ -108,6 +108,31 @@ public sealed class OperatorRuntimeServicesTests
     }
 
     [Fact]
+    public void ActorRateLimitService_PruneStaleWindows_RemovesExpiredActorEntries()
+    {
+        var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-ops-tests", Guid.NewGuid().ToString("N"));
+        var service = new ActorRateLimitService(storagePath, NullLogger<ActorRateLimitService>.Instance);
+        service.AddOrUpdate(new ActorRateLimitPolicy
+        {
+            Id = "rl_trim",
+            ActorType = "ip",
+            EndpointScope = "openai_http",
+            BurstLimit = 10,
+            BurstWindowSeconds = 1,
+            SustainedLimit = 10,
+            SustainedWindowSeconds = 1
+        });
+
+        Assert.True(service.TryConsume("ip", "10.0.0.1", "openai_http", out _));
+        Assert.True(service.TryConsume("ip", "10.0.0.2", "openai_http", out _));
+        Assert.Equal(2, service.ActiveWindowCount);
+
+        service.PruneStaleWindows(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3);
+
+        Assert.Equal(0, service.ActiveWindowCount);
+    }
+
+    [Fact]
     public void PluginHealthService_IncludesPersistedStateWithoutRuntimeReport()
     {
         var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-ops-tests", Guid.NewGuid().ToString("N"));

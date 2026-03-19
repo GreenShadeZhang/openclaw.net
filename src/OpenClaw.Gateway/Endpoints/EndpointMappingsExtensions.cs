@@ -19,5 +19,6 @@ internal static class EndpointMappingsExtensions
         app.MapOpenClawControlEndpoints(startup, runtime);
         app.MapOpenClawWebSocketEndpoints(startup, runtime);
         app.MapOpenClawWebhookEndpoints(startup, runtime);
+        app.MapOpenClawContractEndpoints(startup, runtime);
     }
 }

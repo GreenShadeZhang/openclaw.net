@@ -203,6 +203,7 @@ public sealed class AdminSummaryUsage
     public IReadOnlyList<OpenClaw.Core.Observability.ProviderUsageSnapshot> Providers { get; init; } = [];
     public IReadOnlyList<ProviderRouteHealthSnapshot> Routes { get; init; } = [];
     public IReadOnlyList<ProviderTurnUsageEntry> RecentTurns { get; init; } = [];
+    public IReadOnlyList<OpenClaw.Core.Observability.ToolUsageSnapshot> Tools { get; init; } = [];
 }
 
 public sealed class RetentionStatusResponse

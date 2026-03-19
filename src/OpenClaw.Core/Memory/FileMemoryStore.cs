@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 
@@ -20,10 +21,12 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRe
     private readonly string _notesPath;
     private readonly string _branchesPath;
     private readonly IMemoryCache _sessionCache;
+    private readonly ILogger<FileMemoryStore>? _logger;
 
-    public FileMemoryStore(string basePath, int maxCachedSessions = 100)
+    public FileMemoryStore(string basePath, int maxCachedSessions = 100, ILogger<FileMemoryStore>? logger = null)
     {
         _basePath = basePath ?? throw new ArgumentNullException(nameof(basePath));
+        _logger = logger;
         
         _sessionsPath = Path.Combine(_basePath, "sessions");
         _notesPath = Path.Combine(_basePath, "notes");
@@ -487,9 +490,10 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRe
             {
                 payloadJson = await File.ReadAllTextAsync(file, ct);
             }
-            catch
+            catch (Exception ex)
             {
                 result.SkippedCorruptSessionItems++;
+                _logger?.LogWarning(ex, "Skipping unreadable session file during retention sweep: {Path}", file);
                 continue;
             }
 
@@ -506,6 +510,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRe
             if (session is null)
             {
                 result.SkippedCorruptSessionItems++;
+                _logger?.LogWarning("Skipping corrupt session file during retention sweep: {Path}", file);
                 continue;
             }
 

@@ -128,6 +128,31 @@ public sealed class MafAdapterTests
     }
 
     [Fact]
+    public async Task MafSessionStateStore_SaveFailure_CleansUpTempFile()
+    {
+        var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-maf-sidecar-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var store = CreateStore(storagePath);
+            var agent = CreateAgent();
+            var session = CreateSession("maf-save-cleanup");
+            var agentSession = await CreatePopulatedAgentSessionAsync(agent);
+            var path = store.GetSessionPath(session.Id);
+
+            Directory.CreateDirectory(path);
+
+            await Assert.ThrowsAnyAsync<Exception>(() => store.SaveAsync(agent, session, agentSession, CancellationToken.None));
+            Assert.False(File.Exists(path + ".tmp"));
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
     public void MafSessionStateStore_HistoryHash_ChangesWhenModelOverrideChanges()
     {
         var session = CreateSession("maf-hash");

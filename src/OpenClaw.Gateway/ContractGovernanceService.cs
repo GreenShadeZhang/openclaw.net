@@ -1,0 +1,286 @@
+using Microsoft.Extensions.Logging;
+using OpenClaw.Core.Models;
+using OpenClaw.Core.Observability;
+using OpenClaw.Core.Sessions;
+using OpenClaw.Gateway.Bootstrap;
+
+namespace OpenClaw.Gateway;
+
+/// <summary>
+/// Central service for contract governance: pre-flight validation, cost computation,
+/// and contract lifecycle management. Integrates with existing stores and trackers.
+/// </summary>
+internal sealed class ContractGovernanceService
+{
+    private readonly GatewayStartupContext _startup;
+    private readonly ContractStore _contractStore;
+    private readonly RuntimeEventStore _runtimeEvents;
+    private readonly ProviderUsageTracker _providerUsage;
+    private readonly ILogger<ContractGovernanceService> _logger;
+
+    /// <summary>Tools that require JIT runtime mode (dynamic/reflection-heavy).</summary>
+    private static readonly HashSet<string> JitOnlyToolPatterns = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "delegate_agent" // delegation may load dynamic profiles
+    };
+
+    public ContractGovernanceService(
+        GatewayStartupContext startup,
+        ContractStore contractStore,
+        RuntimeEventStore runtimeEvents,
+        ProviderUsageTracker providerUsage,
+        ILogger<ContractGovernanceService> logger)
+    {
+        _startup = startup;
+        _contractStore = contractStore;
+        _runtimeEvents = runtimeEvents;
+        _providerUsage = providerUsage;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Pre-flight validation of a contract policy against the current runtime state.
+    /// Does not persist anything.
+    /// </summary>
+    public ContractValidationResult ValidatePreFlight(
+        ContractPolicy policy,
+        IReadOnlyCollection<string> registeredToolNames)
+    {
+        var errors = new List<string>();
+        var warnings = new List<string>();
+        var granted = new List<string>();
+        var denied = new List<string>();
+
+        var effectiveMode = _startup.RuntimeState.EffectiveModeName;
+
+        // Runtime mode check
+        if (!string.IsNullOrWhiteSpace(policy.RequiredRuntimeMode))
+        {
+            var required = policy.RequiredRuntimeMode.Trim().ToLowerInvariant();
+            if (required is not ("aot" or "jit"))
+            {
+                errors.Add($"Invalid RequiredRuntimeMode '{policy.RequiredRuntimeMode}'. Must be 'aot' or 'jit'.");
+            }
+            else if (!string.Equals(required, effectiveMode, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add($"Contract requires runtime mode '{required}' but gateway is running in '{effectiveMode}'.");
+            }
+        }
+
+        // Tool availability and JIT-compatibility check
+        var registeredSet = new HashSet<string>(registeredToolNames, StringComparer.Ordinal);
+        foreach (var tool in policy.RequestedTools)
+        {
+            if (string.IsNullOrWhiteSpace(tool))
+                continue;
+
+            if (!registeredSet.Contains(tool))
+            {
+                denied.Add(tool);
+                warnings.Add($"Tool '{tool}' is not registered in the current runtime.");
+                continue;
+            }
+
+            if (_startup.RuntimeState.EffectiveMode == GatewayRuntimeMode.Aot &&
+                JitOnlyToolPatterns.Contains(tool))
+            {
+                denied.Add(tool);
+                warnings.Add($"Tool '{tool}' requires JIT runtime mode but gateway is running in AOT.");
+                continue;
+            }
+
+            granted.Add(tool);
+        }
+
+        // Budget validation
+        if (policy.MaxCostUsd < 0)
+            errors.Add("MaxCostUsd cannot be negative.");
+        if (policy.SoftCostWarningUsd < 0)
+            errors.Add("SoftCostWarningUsd cannot be negative.");
+        if (policy.MaxCostUsd > 0 && policy.SoftCostWarningUsd > policy.MaxCostUsd)
+            errors.Add("SoftCostWarningUsd cannot exceed MaxCostUsd.");
+        if (policy.MaxTokens < 0)
+            errors.Add("MaxTokens cannot be negative.");
+        if (policy.MaxToolCalls < 0)
+            errors.Add("MaxToolCalls cannot be negative.");
+        if (policy.MaxRuntimeSeconds < 0)
+            errors.Add("MaxRuntimeSeconds cannot be negative.");
+
+        // Scoped capability validation
+        foreach (var scope in policy.ScopedCapabilities)
+        {
+            if (!registeredSet.Contains(scope.ToolName))
+                warnings.Add($"ScopedCapability references unregistered tool '{scope.ToolName}'.");
+            if (scope.AllowedPaths.Length == 0)
+                warnings.Add($"ScopedCapability for '{scope.ToolName}' has no allowed paths.");
+        }
+
+        var isValid = errors.Count == 0;
+
+        return new ContractValidationResult
+        {
+            IsValid = isValid,
+            GrantedTools = granted.ToArray(),
+            DeniedTools = denied.ToArray(),
+            Errors = errors.ToArray(),
+            Warnings = warnings.ToArray(),
+            EffectiveRuntimeMode = effectiveMode
+        };
+    }
+
+    /// <summary>
+    /// Create a contract, validate it, persist the snapshot, and emit a runtime event.
+    /// </summary>
+    public ContractCreateResponse CreateContract(
+        ContractCreateRequest request,
+        string sessionId,
+        IReadOnlyCollection<string> registeredToolNames)
+    {
+        var contractId = $"ctr_{Guid.NewGuid():N}"[..20];
+
+        var policy = new ContractPolicy
+        {
+            Id = contractId,
+            Name = request.Name,
+            RequiredRuntimeMode = request.RequiredRuntimeMode,
+            RequestedTools = request.RequestedTools ?? [],
+            ScopedCapabilities = request.ScopedCapabilities ?? [],
+            MaxCostUsd = request.MaxCostUsd,
+            SoftCostWarningUsd = request.SoftCostWarningUsd,
+            MaxTokens = request.MaxTokens,
+            MaxToolCalls = request.MaxToolCalls,
+            MaxRuntimeSeconds = request.MaxRuntimeSeconds,
+            CreatedBy = request.CreatedBy,
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        };
+
+        var validation = ValidatePreFlight(policy, registeredToolNames);
+
+        // Persist initial snapshot
+        var snapshot = new ContractExecutionSnapshot
+        {
+            ContractId = contractId,
+            SessionId = sessionId,
+            Status = validation.IsValid ? "active" : "invalid",
+            StartedAtUtc = DateTimeOffset.UtcNow
+        };
+        _contractStore.Append(snapshot);
+
+        // Emit runtime event
+        _runtimeEvents.Append(new RuntimeEventEntry
+        {
+            Id = $"evt_{Guid.NewGuid():N}"[..20],
+            SessionId = sessionId,
+            CorrelationId = contractId,
+            Component = "Contract",
+            Action = "created",
+            Severity = validation.IsValid ? "info" : "warning",
+            Summary = validation.IsValid
+                ? $"Contract '{contractId}' created with {policy.RequestedTools.Length} requested tools."
+                : $"Contract '{contractId}' created with validation errors: {string.Join("; ", validation.Errors)}",
+            Metadata = new Dictionary<string, string>
+            {
+                ["contractId"] = contractId,
+                ["isValid"] = validation.IsValid.ToString()
+            }
+        });
+
+        _logger.LogInformation("Contract {ContractId} created for session {SessionId}, valid={IsValid}",
+            contractId, sessionId, validation.IsValid);
+
+        return new ContractCreateResponse
+        {
+            Policy = policy,
+            Validation = validation
+        };
+    }
+
+    /// <summary>
+    /// Compute approximate USD cost for a session based on provider usage and configured rates.
+    /// </summary>
+    public decimal ComputeSessionCostUsd(string sessionId)
+    {
+        var userRates = _startup.Config.TokenCostRates;
+        var defaultRates = DefaultTokenCostRates.Rates;
+
+        var turns = _providerUsage.RecentTurns(sessionId, limit: 256);
+        var totalCost = 0m;
+
+        foreach (var turn in turns)
+        {
+            var key = $"{turn.ProviderId}:{turn.ModelId}";
+
+            // Try user-configured rates first (model-specific, then provider-level)
+            if (userRates.TryGetValue(key, out var ratePerThousand))
+            {
+                totalCost += (turn.InputTokens + turn.OutputTokens) * ratePerThousand / 1000m;
+            }
+            else if (userRates.TryGetValue(turn.ProviderId, out var providerRate))
+            {
+                totalCost += (turn.InputTokens + turn.OutputTokens) * providerRate / 1000m;
+            }
+            // Fall back to built-in defaults (model-specific, then provider-level)
+            else if (defaultRates.TryGetValue(key, out var defaultRate))
+            {
+                totalCost += (turn.InputTokens + turn.OutputTokens) * defaultRate / 1000m;
+            }
+            else if (defaultRates.TryGetValue(turn.ProviderId, out var defaultProviderRate))
+            {
+                totalCost += (turn.InputTokens + turn.OutputTokens) * defaultProviderRate / 1000m;
+            }
+        }
+
+        return totalCost;
+    }
+
+    /// <summary>
+    /// Check if a session's contract cost budget has been exceeded.
+    /// Returns (maxCost, currentCost, exceeded).
+    /// </summary>
+    public (decimal MaxCost, decimal CurrentCost, bool Exceeded) CheckCostBudget(
+        string channelId, string senderId, SessionManager sessionManager)
+    {
+        var session = sessionManager.TryGetActive(channelId, senderId);
+        if (session?.ContractPolicy is not { MaxCostUsd: > 0 } policy)
+            return (0m, 0m, false);
+
+        var currentCost = ComputeSessionCostUsd(session.Id);
+
+        if (policy.SoftCostWarningUsd > 0 && currentCost >= policy.SoftCostWarningUsd && currentCost < policy.MaxCostUsd)
+        {
+            _logger.LogWarning("Contract {ContractId} soft cost warning: {Current:C} / {Max:C}",
+                policy.Id, currentCost, policy.MaxCostUsd);
+        }
+
+        return (policy.MaxCostUsd, currentCost, currentCost >= policy.MaxCostUsd);
+    }
+
+    /// <summary>Query persisted contract snapshots.</summary>
+    public ContractStatusResponse? GetContract(string contractId)
+    {
+        var snapshots = _contractStore.Query(contractId: contractId, limit: 1);
+        if (snapshots.Count == 0)
+            return null;
+
+        // We don't persist the full policy in JSONL — the policy lives on the Session.
+        // Return what we have from the snapshot.
+        return new ContractStatusResponse
+        {
+            Policy = new ContractPolicy { Id = contractId },
+            Snapshot = snapshots[0]
+        };
+    }
+
+    /// <summary>List contract snapshots, optionally filtered by session.</summary>
+    public ContractListResponse ListContracts(string? sessionId = null, int limit = 50)
+    {
+        var snapshots = _contractStore.Query(sessionId: sessionId, limit: limit);
+        var items = snapshots.Select(s => new ContractStatusResponse
+        {
+            Policy = new ContractPolicy { Id = s.ContractId },
+            Snapshot = s
+        }).ToArray();
+
+        return new ContractListResponse { Items = items };
+    }
+}

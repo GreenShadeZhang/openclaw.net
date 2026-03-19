@@ -45,6 +45,17 @@ internal static class SecurityServicesExtensions
             new PluginHealthService(
                 startup.Config.Memory.StoragePath,
                 sp.GetRequiredService<ILogger<PluginHealthService>>()));
+        services.AddSingleton(sp =>
+            new ContractStore(
+                startup.Config.Memory.StoragePath,
+                sp.GetRequiredService<ILogger<ContractStore>>()));
+        services.AddSingleton(sp =>
+            new ContractGovernanceService(
+                startup,
+                sp.GetRequiredService<ContractStore>(),
+                sp.GetRequiredService<RuntimeEventStore>(),
+                sp.GetRequiredService<OpenClaw.Core.Observability.ProviderUsageTracker>(),
+                sp.GetRequiredService<ILogger<ContractGovernanceService>>()));
 
         return services;
     }
