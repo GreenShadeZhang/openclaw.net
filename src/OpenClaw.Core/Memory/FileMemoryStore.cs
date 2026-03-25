@@ -21,6 +21,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRe
     private readonly string _notesPath;
     private readonly string _branchesPath;
     private readonly IMemoryCache _sessionCache;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _sessionLoadGates = new(StringComparer.Ordinal);
     private readonly ILogger<FileMemoryStore>? _logger;
 
     public FileMemoryStore(string basePath, int maxCachedSessions = 100, ILogger<FileMemoryStore>? logger = null)
@@ -51,59 +52,76 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRe
         if (_sessionCache.TryGetValue(sessionId, out Session? cached))
             return cached;
 
-        var encodedId = EncodeKey(sessionId);
-        var filePath = Path.Combine(_sessionsPath, $"{encodedId}.json");
-
-        // Legacy migration: check for unencoded filename
-        var legacyPath = Path.Combine(_sessionsPath, $"{sessionId}.json");
-        if (!File.Exists(filePath) && File.Exists(legacyPath))
+        var loadGate = _sessionLoadGates.GetOrAdd(sessionId, static _ => new SemaphoreSlim(1, 1));
+        await loadGate.WaitAsync(ct);
+        try
         {
+            if (_sessionCache.TryGetValue(sessionId, out cached))
+                return cached;
+
+            var encodedId = EncodeKey(sessionId);
+            var filePath = Path.Combine(_sessionsPath, $"{encodedId}.json");
+
+            // Legacy migration: check for unencoded filename
+            var legacyPath = Path.Combine(_sessionsPath, $"{sessionId}.json");
+            if (!File.Exists(filePath) && File.Exists(legacyPath))
+            {
+                try
+                {
+                    await using var legacyStream = new FileStream(legacyPath, new FileStreamOptions
+                    {
+                        Mode = FileMode.Open,
+                        Access = FileAccess.Read,
+                        Share = FileShare.Read,
+                        Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+                    });
+                    var session = await JsonSerializer.DeserializeAsync(legacyStream, CoreJsonContext.Default.Session, ct);
+                    if (session is not null)
+                    {
+                        // Migrate to encoded filename
+                        await SaveSessionAsync(session, ct);
+                        File.Delete(legacyPath);
+                        return session;
+                    }
+                }
+                catch
+                {
+                    // Fall through to normal path
+                }
+            }
+
+            if (!File.Exists(filePath))
+                return null;
+
             try
             {
-                await using var legacyStream = new FileStream(legacyPath, new FileStreamOptions
+                await using var stream = new FileStream(filePath, new FileStreamOptions
                 {
                     Mode = FileMode.Open,
                     Access = FileAccess.Read,
                     Share = FileShare.Read,
                     Options = FileOptions.Asynchronous | FileOptions.SequentialScan
                 });
-                var session = await JsonSerializer.DeserializeAsync(legacyStream, CoreJsonContext.Default.Session, ct);
-                if (session is not null)
+                var loaded = await JsonSerializer.DeserializeAsync(stream, CoreJsonContext.Default.Session, ct);
+
+                if (loaded is not null)
                 {
-                    // Migrate to encoded filename
-                    await SaveSessionAsync(session, ct);
-                    File.Delete(legacyPath);
-                    return session;
+                    if (_sessionCache.TryGetValue(sessionId, out Session? canonical))
+                        return canonical;
+
+                    await AddToCacheAsync(sessionId, loaded);
                 }
+
+                return loaded;
             }
             catch
             {
-                // Fall through to normal path
+                return null;
             }
         }
-
-        if (!File.Exists(filePath))
-            return null;
-
-        try
+        finally
         {
-            await using var stream = new FileStream(filePath, new FileStreamOptions
-            {
-                Mode = FileMode.Open,
-                Access = FileAccess.Read,
-                Share = FileShare.Read,
-                Options = FileOptions.Asynchronous | FileOptions.SequentialScan
-            });
-            var loaded = await JsonSerializer.DeserializeAsync(stream, CoreJsonContext.Default.Session, ct);
-            
-            if (loaded is not null)
-                await AddToCacheAsync(sessionId, loaded);
-            
-            return loaded;
-        }
-        catch
-        {
-            return null;
+            loadGate.Release();
         }
     }
 
