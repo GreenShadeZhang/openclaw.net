@@ -21,6 +21,8 @@ public sealed class McpNativeTool(
         try
         {
             using var argsDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            if (argsDoc.RootElement.ValueKind != JsonValueKind.Object)
+                return $"Error: Invalid JSON arguments for MCP tool '{localName}': JSON root must be an object.";
             var argsDict = new Dictionary<string, object?>(StringComparer.Ordinal);
             foreach (var prop in argsDoc.RootElement.EnumerateObject())
             {
