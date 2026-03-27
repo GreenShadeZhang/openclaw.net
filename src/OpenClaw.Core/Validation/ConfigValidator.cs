@@ -171,6 +171,9 @@ public static class ConfigValidator
         {
             foreach (var (serverId, server) in config.Plugins.Mcp.Servers)
             {
+                if (!server.Enabled)
+                    continue;
+
                 var transport = NormalizeMcpTransport(server);
                 if (transport is not ("stdio" or "http"))
                 {
