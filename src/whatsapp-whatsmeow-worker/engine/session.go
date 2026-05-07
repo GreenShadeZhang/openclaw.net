@@ -11,11 +11,11 @@ import (
 
 	"github.com/openclaw/whatsapp-whatsmeow-worker/protocol"
 	"go.mau.fi/whatsmeow"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/util/dbushelper"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
+	waLog "go.mau.fi/whatsmeow/util/log"
 
 	_ "github.com/mattn/go-sqlite3"
 	"google.golang.org/protobuf/proto"
@@ -23,10 +23,10 @@ import (
 
 // Session wraps a single whatsmeow client for one WhatsApp account.
 type Session struct {
-	AccountID  string
-	SelfID     string
-	Connected  bool
-	ChannelID  string
+	AccountID string
+	SelfID    string
+	Connected bool
+	ChannelID string
 
 	config       AccountConfig
 	globalConfig *Config
@@ -57,12 +57,12 @@ func (s *Session) Start(ctx context.Context) error {
 	}
 
 	dbPath := filepath.Join(sessionPath, "whatsmeow.db")
-	container, err := sqlstore.New("sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), waLog.Noop)
+	container, err := sqlstore.New(ctx, "sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), waLog.Noop)
 	if err != nil {
 		return fmt.Errorf("failed to open session store: %w", err)
 	}
 
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get device: %w", err)
 	}
@@ -75,7 +75,7 @@ func (s *Session) Start(ctx context.Context) error {
 			if err := s.client.Connect(); err != nil {
 				return fmt.Errorf("connect failed: %w", err)
 			}
-			code, err := s.client.PairPhone(s.config.PhoneNumber, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+			code, err := s.client.PairPhone(ctx, s.config.PhoneNumber, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
 			if err != nil {
 				s.writer.SendNotification("channel_auth_event", map[string]interface{}{
 					"channelId": s.ChannelID,
@@ -217,7 +217,7 @@ func (s *Session) sendMedia(ctx context.Context, jid types.JID, req *SendRequest
 				FileSHA256:    uploaded.FileSHA256,
 				FileLength:    proto.Uint64(uint64(len(data))),
 				Mimetype:      &mimeType,
-				Ptt:           proto.Bool(true),
+				PTT:           proto.Bool(true),
 			},
 		}
 
@@ -266,7 +266,7 @@ func (s *Session) sendMedia(ctx context.Context, jid types.JID, req *SendRequest
 		}
 	}
 
-	_, err := s.client.SendMessage(ctx, jid, msg)
+	_, err = s.client.SendMessage(ctx, jid, msg)
 	return err
 }
 
@@ -286,7 +286,7 @@ func (s *Session) SendTyping(ctx context.Context, req *TypingRequest) error {
 		media = types.ChatPresencePaused
 	}
 
-	return s.client.SendChatPresence(jid, media, "")
+	return s.client.SendChatPresence(ctx, jid, media, types.ChatPresenceMediaText)
 }
 
 // SendReadReceipt marks a message as read.
@@ -306,7 +306,7 @@ func (s *Session) SendReadReceipt(ctx context.Context, req *ReceiptRequest) erro
 	}
 
 	ids := []types.MessageID{req.MessageID}
-	return s.client.MarkRead(ids, time.Now(), chatJid, senderJid)
+	return s.client.MarkRead(ctx, ids, time.Now(), chatJid, senderJid)
 }
 
 // SendReaction sends an emoji reaction to a message.
@@ -320,16 +320,11 @@ func (s *Session) SendReaction(ctx context.Context, req *ReactionRequest) error 
 		return nil
 	}
 
-	var senderJid types.JID
-	if req.Participant != "" {
-		senderJid, _ = types.ParseJID(req.Participant)
-	}
-
 	msg := &waProto.Message{
 		ReactionMessage: &waProto.ReactionMessage{
 			Key: &waProto.MessageKey{
-				RemoteJid: &req.RemoteJid,
-				Id:        &req.MessageID,
+				RemoteJID: &req.RemoteJid,
+				ID:        &req.MessageID,
 				FromMe:    proto.Bool(false),
 				Participant: func() *string {
 					if req.Participant != "" {
@@ -339,7 +334,7 @@ func (s *Session) SendReaction(ctx context.Context, req *ReactionRequest) error 
 				}(),
 			},
 			Text:              &req.Emoji,
-			SenderTimestampMs: proto.Int64(time.Now().UnixMilli()),
+			SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
 		},
 	}
 
@@ -451,11 +446,11 @@ func (s *Session) handleInboundMessage(evt *events.Message) {
 	// Extract context info (mentions, quoted message) with nil safety
 	if ext := evt.Message.GetExtendedTextMessage(); ext != nil {
 		if ci := ext.GetContextInfo(); ci != nil {
-			if ci.GetStanzaId() != "" {
-				msg["replyToMessageId"] = ci.GetStanzaId()
+			if ci.GetStanzaID() != "" {
+				msg["replyToMessageId"] = ci.GetStanzaID()
 			}
-			if len(ci.GetMentionedJid()) > 0 {
-				msg["mentionedIds"] = ci.GetMentionedJid()
+			if len(ci.GetMentionedJID()) > 0 {
+				msg["mentionedIds"] = ci.GetMentionedJID()
 			}
 		}
 	}
@@ -519,7 +514,7 @@ func (s *Session) downloadInboundMedia(evt *events.Message) map[string]interface
 		return nil
 	}
 
-	data, err := s.client.Download(downloadable)
+	data, err := s.client.Download(context.Background(), downloadable)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to download %s media: %v\n", mediaType, err)
 		return map[string]interface{}{
