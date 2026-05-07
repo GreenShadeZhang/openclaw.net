@@ -44,4 +44,7 @@ launchSettings.json
 # Draft / scratch docs
 REDDIT_DOTNET_POST.md
 roadmap.md
+RELEASE_CANDIDATE_REPORT.md
 
+# Local documentation packages
+openclaw-docs.zip

@@ -17,6 +17,22 @@ OpenClaw.NET is a NativeAOT-friendly AI agent runtime and gateway for .NET with 
 
 It is for .NET developers and operators who want a local or self-hosted agent gateway with explicit diagnostics, first-party .NET tools, OpenAI-compatible HTTP surfaces, and a path from source checkout to NativeAOT release artifacts.
 
+> **Docs:** [AgentQi.dev](https://agentqi.dev) is the documentation and ecosystem home for OpenClaw.NET. OpenClaw.NET remains the current runtime and repository identity.
+
+## AgentQi Documentation
+
+AgentQi is the broader developer-infrastructure direction behind OpenClaw.NET: practical, observable, self-hosted AI agent systems for .NET developers.
+
+OpenClaw.NET is the runtime and repository you can use today. AgentQiX is the likely future runtime identity.
+
+Start here:
+
+- [Quickstart](https://agentqi.dev/docs/quickstart)
+- [Getting Started](https://agentqi.dev/docs/getting-started)
+- [Architecture](https://agentqi.dev/docs/start-here)
+- [Security](https://agentqi.dev/docs/security)
+- [Roadmap](https://agentqi.dev/docs/roadmap)
+
 ## What Works Now
 
 - **NativeAOT-friendly** runtime and gateway for .NET agent workloads
@@ -31,28 +47,6 @@ It is for .NET developers and operators who want a local or self-hosted agent ga
 Start with [docs/START_HERE.md](docs/START_HERE.md) for the evaluator overview, [docs/QUICKSTART.md](docs/QUICKSTART.md) for the supported local setup path, or [docs/RELEASES.md](docs/RELEASES.md) for desktop downloads.
 
 For the experimental A2A v1 surface, see [docs/a2a.md](docs/a2a.md).
-
-## Fastest Source Proof
-
-This deterministic sample proves the runtime loop and tool path without provider keys, Ollama, Docker, or a browser:
-
-```bash
-git clone https://github.com/clawdotnet/openclaw.net
-cd openclaw.net
-
-dotnet restore OpenClaw.Net.slnx
-dotnet build OpenClaw.Net.slnx --configuration Release --no-restore
-dotnet run --project samples/OpenClaw.HelloAgent -c Release --no-build
-```
-
-Expected output:
-
-```text
-OpenClaw.HelloAgent
-User: hello
-Agent: hello from OpenClaw.NET
-Tool: echo(hello): ok
-```
 
 ## Download And Run Desktop
 
@@ -156,7 +150,7 @@ Outbound web fetches and browser navigations run through `OpenClaw:Tooling:UrlSa
 
 ## Docs
 
-The full documentation map lives at **[docs/README.md](docs/README.md)**. Starting points:
+The public documentation site is **[AgentQi.dev](https://agentqi.dev)**. The source documentation map lives at **[docs/README.md](docs/README.md)**. Starting points:
 
 | Doc | When to read |
 |-----|--------------|
@@ -180,3 +174,25 @@ If this project helps your .NET AI work, please star it.
 ## License
 
 [MIT](LICENSE)
+
+## Fastest Source Proof
+
+This deterministic sample proves the runtime loop and tool path without provider keys, Ollama, Docker, or a browser:
+
+```bash
+git clone https://github.com/clawdotnet/openclaw.net
+cd openclaw.net
+
+dotnet restore OpenClaw.Net.slnx
+dotnet build OpenClaw.Net.slnx --configuration Release --no-restore
+dotnet run --project samples/OpenClaw.HelloAgent -c Release --no-build
+```
+
+Expected output:
+
+```text
+OpenClaw.HelloAgent
+User: hello
+Agent: hello from OpenClaw.NET
+Tool: echo(hello): ok
+```
