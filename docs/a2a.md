@@ -45,6 +45,19 @@ By default, OpenClaw exposes these A2A protocol bindings:
 
 The path prefix can be changed with `OpenClaw:MicrosoftAgentFramework:A2APathPrefix`.
 
+## Task Support
+
+OpenClaw's A2A surface includes the protocol task model.
+
+- `message:send` and `message:stream` execute in a task context and return task-scoped ids
+- streaming emits standard task lifecycle states (`submitted`, `working`, terminal `completed`/`failed`)
+- cancellation is wired through the A2A handler (`CancelAsync`) when clients provide a task id
+
+Implementation notes for operators:
+
+- task state is stored in an in-memory `ITaskStore` (not durable across process restarts)
+- A2A server run mode is `DisallowBackground`, so background task execution is intentionally disabled
+
 ## Agent Names
 
 OpenClaw uses two A2A-facing names with different stability contracts:
