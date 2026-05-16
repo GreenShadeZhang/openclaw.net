@@ -130,6 +130,22 @@ public sealed class A2UiFrameValidatorTests
     }
 
     [Fact]
+    public void ValidateV09_RejectsComponentWithoutId()
+    {
+        var result = A2UiV09MessageValidator.Validate(new WsServerEnvelope
+        {
+            Type = "canvas",
+            Operation = "updateComponents",
+            SurfaceId = "surface-1",
+            CatalogId = A2UiCatalogRegistry.AGenUiCatalogId,
+            Components = ["""{"type":"Text","text":"Hello"}"""]
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains("id", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ValidateV09_UpdateDataModelAcceptsJsonObject()
     {
         var result = A2UiV09MessageValidator.Validate(new WsServerEnvelope
@@ -367,6 +383,37 @@ public sealed class A2UiFrameValidatorTests
             Operation = "createSurface",
             SurfaceId = "surface-1",
             CatalogId = "urn:a2ui:catalog:unknown"
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains("catalog", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateV09_RejectsUnsupportedAdvertisedCatalogIds()
+    {
+        var result = A2UiV09MessageValidator.Validate(new WsServerEnvelope
+        {
+            Type = "canvas",
+            Operation = "createSurface",
+            SurfaceId = "surface-1",
+            SupportedCatalogIds = ["urn:a2ui:catalog:unknown"]
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains("catalog", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateV09_RejectsRequestedCatalogWhenNotAdvertised()
+    {
+        var result = A2UiV09MessageValidator.Validate(new WsServerEnvelope
+        {
+            Type = "canvas",
+            Operation = "createSurface",
+            SurfaceId = "surface-1",
+            CatalogId = A2UiCatalogRegistry.AGenUiCatalogId,
+            SupportedCatalogIds = [A2UiCatalogRegistry.OpenClawV08CatalogId]
         });
 
         Assert.False(result.IsValid);

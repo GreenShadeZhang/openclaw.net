@@ -437,9 +437,28 @@ public sealed partial class MainWindowViewModel
             return surface!.DataModelJson!;
 
         var values = (surface?.Components ?? CanvasFrames)
-            .Where(static frame => !string.IsNullOrWhiteSpace(frame.ValueText) || !string.IsNullOrWhiteSpace(frame.SelectedValue))
-            .ToDictionary(static frame => frame.Id, static frame => (object?)(frame.SelectedValue ?? frame.ValueText));
+            .Select(static frame => new { frame.Id, Value = GetA2UiSyncValue(frame) })
+            .Where(static item => item.Value is not null)
+            .ToDictionary(static item => item.Id, static item => item.Value);
         return JsonSerializer.Serialize(values);
+    }
+
+    private static object? GetA2UiSyncValue(A2UiFrameItem frame)
+    {
+        if (frame.IsChecklist)
+        {
+            var selectedOptions = frame.Options
+                .Where(static option => option.IsSelected)
+                .Select(static option => option.Value)
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .ToArray();
+            if (selectedOptions.Length > 0)
+                return selectedOptions;
+        }
+
+        return !string.IsNullOrWhiteSpace(frame.SelectedValue)
+            ? frame.SelectedValue
+            : string.IsNullOrWhiteSpace(frame.ValueText) ? null : frame.ValueText;
     }
 
     private string BuildCanvasSnapshotJson(string? surfaceId)
@@ -513,7 +532,9 @@ public sealed partial class MainWindowViewModel
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.Clone();
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                ? doc.RootElement.Clone()
+                : null;
         }
         catch (JsonException)
         {

@@ -21,7 +21,7 @@ internal sealed class CanvasCommandBroker
     private readonly RuntimeEventStore _runtimeEvents;
     private readonly ConcurrentDictionary<string, PendingCommand> _pending = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ClientCanvasProfile> _clientProfiles = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<SurfaceCatalogKey, string> _surfaceCatalogs = new();
+    private readonly ConcurrentDictionary<SurfaceCatalogKey, string> _surfaceCatalogs = new(SurfaceCatalogKeyComparer.Instance);
 
     public CanvasCommandBroker(GatewayConfig config, WebSocketChannel webSocketChannel, RuntimeEventStore runtimeEvents)
     {
@@ -256,7 +256,8 @@ internal sealed class CanvasCommandBroker
 
     private static bool IsCatalogLockedUpdate(string commandType)
         => string.Equals(commandType, "a2ui_update_components", StringComparison.Ordinal) ||
-           string.Equals(commandType, "a2ui_update_data_model", StringComparison.Ordinal);
+           string.Equals(commandType, "a2ui_update_data_model", StringComparison.Ordinal) ||
+           string.Equals(commandType, "a2ui_sync_ui_to_data", StringComparison.Ordinal);
 
     private void UpdateSurfaceCatalogLockAfterSuccess(Session session, WsServerEnvelope outbound)
     {
@@ -269,7 +270,7 @@ internal sealed class CanvasCommandBroker
             return;
         }
 
-        if (!string.Equals(outbound.Type, "a2ui_create_surface", StringComparison.Ordinal))
+        if (!IsCatalogAwareCommand(outbound.Type) || string.IsNullOrWhiteSpace(outbound.CatalogId))
             return;
 
         if (!TryChooseCatalog(session.SenderId, outbound.CatalogId, out var catalog, out _) || catalog is null)
@@ -304,6 +305,23 @@ internal sealed class CanvasCommandBroker
     private sealed record ClientCanvasProfile(string[] Capabilities, string[] SupportedCatalogIds);
 
     private sealed record SurfaceCatalogKey(string SenderId, string SessionId, string SurfaceId);
+
+    private sealed class SurfaceCatalogKeyComparer : IEqualityComparer<SurfaceCatalogKey>
+    {
+        public static readonly SurfaceCatalogKeyComparer Instance = new();
+
+        public bool Equals(SurfaceCatalogKey? x, SurfaceCatalogKey? y)
+            => x is not null && y is not null &&
+               string.Equals(x.SenderId, y.SenderId, StringComparison.Ordinal) &&
+               string.Equals(x.SessionId, y.SessionId, StringComparison.Ordinal) &&
+               string.Equals(x.SurfaceId, y.SurfaceId, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode(SurfaceCatalogKey obj)
+            => HashCode.Combine(
+                StringComparer.Ordinal.GetHashCode(obj.SenderId),
+                StringComparer.Ordinal.GetHashCode(obj.SessionId),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.SurfaceId));
+    }
 
     private sealed class PendingCommand
     {

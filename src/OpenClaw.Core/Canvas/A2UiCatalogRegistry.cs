@@ -84,7 +84,15 @@ public static class A2UiCatalogRegistry
     public static bool TryChooseCatalog(IEnumerable<string>? supportedCatalogIds, string? requestedCatalogId, out A2UiCatalogDescriptor catalog)
     {
         if (!string.IsNullOrWhiteSpace(requestedCatalogId))
+        {
+            if (supportedCatalogIds is not null && !supportedCatalogIds.Any(catalogId => string.Equals(catalogId, requestedCatalogId, StringComparison.OrdinalIgnoreCase)))
+            {
+                catalog = null!;
+                return false;
+            }
+
             return TryGetCatalog(requestedCatalogId, out catalog);
+        }
 
         if (supportedCatalogIds is not null)
         {
@@ -96,6 +104,12 @@ public static class A2UiCatalogRegistry
             {
                 if (TryGetCatalog(catalogId, out catalog))
                     return true;
+            }
+
+            if (supported.Length > 0)
+            {
+                catalog = null!;
+                return false;
             }
         }
 

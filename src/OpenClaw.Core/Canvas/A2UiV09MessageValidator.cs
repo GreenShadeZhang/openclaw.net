@@ -105,6 +105,9 @@ public static class A2UiV09MessageValidator
                 if (!component.TryGetProperty("type", out var typeProp) || typeProp.ValueKind != JsonValueKind.String)
                     return A2UiValidationResult.Invalid($"A2UI v0.9 component {index} is missing string property 'type'.");
 
+                if (!HasNonEmptyString(component, "id"))
+                    return A2UiValidationResult.Invalid($"A2UI v0.9 component {index} is missing string property 'id'.");
+
                 var type = typeProp.GetString();
                 if (!A2UiCatalogRegistry.IsSupportedComponentType(catalog, type))
                     return A2UiValidationResult.Invalid($"A2UI v0.9 component {index} has unsupported component type '{type}'.");
@@ -113,6 +116,11 @@ public static class A2UiV09MessageValidator
 
         return A2UiValidationResult.Valid(1);
     }
+
+    private static bool HasNonEmptyString(JsonElement root, string propertyName)
+        => root.TryGetProperty(propertyName, out var prop) &&
+           prop.ValueKind == JsonValueKind.String &&
+           !string.IsNullOrWhiteSpace(prop.GetString());
 
     private static A2UiValidationResult ValidateUpdateDataModel(WsServerEnvelope envelope)
     {

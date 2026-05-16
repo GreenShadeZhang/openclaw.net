@@ -321,6 +321,38 @@ public sealed class CanvasCommandBrokerTests
     }
 
     [Fact]
+    public async Task SendCommandAsync_SuccessfulUpdateComponentsLocksCatalogForSurface()
+    {
+        var channel = new WebSocketChannel(new WebSocketConfig());
+        var ws = new TestWebSocket();
+        Assert.True(channel.TryAddConnectionForTest("client", ws, IPAddress.Loopback, useJsonEnvelope: true));
+        var broker = CreateBroker(channel);
+        await broker.HandleClientEnvelopeAsync("client", ReadyWithCatalogs(
+            ["canvas.a2ui"],
+            [A2UiCatalogRegistry.OpenClawV08CatalogId, A2UiCatalogRegistry.AGenUiCatalogId]), CancellationToken.None);
+
+        var task = broker.SendCommandAsync(
+            Session("sess", "client"),
+            new WsServerEnvelope
+            {
+                Type = "a2ui_update_components",
+                SurfaceId = "surface-1",
+                CatalogId = A2UiCatalogRegistry.OpenClawV08CatalogId
+            },
+            "canvas_ack",
+            "canvas.a2ui",
+            CancellationToken.None);
+
+        var sent = await WaitForSentEnvelopeAsync(ws);
+        await AckAsync(broker, "client", sent, "sess");
+        var result = await task;
+
+        Assert.True(result.Success);
+        Assert.True(broker.TryGetSurfaceCatalogId("client", "sess", "surface-1", out var catalogId));
+        Assert.Equal(A2UiCatalogRegistry.OpenClawV08CatalogId, catalogId);
+    }
+
+    [Fact]
     public async Task SendCommandAsync_RejectsConflictingCatalogUpdateBeforeSending()
     {
         var channel = new WebSocketChannel(new WebSocketConfig());
@@ -344,6 +376,78 @@ public sealed class CanvasCommandBrokerTests
             "canvas.a2ui",
             CancellationToken.None);
 
+        Assert.False(result.Success);
+        Assert.Contains("catalog", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(ws.Sent);
+    }
+
+    [Fact]
+    public async Task SendCommandAsync_RejectsConflictingCatalogUpdateWithMixedCaseSurfaceIdBeforeSending()
+    {
+        var channel = new WebSocketChannel(new WebSocketConfig());
+        var ws = new TestWebSocket();
+        Assert.True(channel.TryAddConnectionForTest("client", ws, IPAddress.Loopback, useJsonEnvelope: true));
+        var broker = CreateBroker(channel);
+        await broker.HandleClientEnvelopeAsync("client", ReadyWithCatalogs(
+            ["canvas.a2ui"],
+            [A2UiCatalogRegistry.OpenClawV08CatalogId, A2UiCatalogRegistry.AGenUiCatalogId]), CancellationToken.None);
+        await LockSurfaceCatalogThroughCreateAsync(broker, ws, "client", "sess", "Main", A2UiCatalogRegistry.OpenClawV08CatalogId);
+
+        var task = broker.SendCommandAsync(
+            Session("sess", "client"),
+            new WsServerEnvelope
+            {
+                Type = "a2ui_update_components",
+                SurfaceId = "main",
+                CatalogId = A2UiCatalogRegistry.AGenUiCatalogId
+            },
+            "canvas_ack",
+            "canvas.a2ui",
+            CancellationToken.None);
+
+        if (await Task.WhenAny(task, Task.Delay(200)) != task)
+        {
+            var sent = await WaitForSentEnvelopeAsync(ws, skip: 1);
+            await AckAsync(broker, "client", sent, "sess");
+        }
+
+        var result = await task;
+        Assert.False(result.Success);
+        Assert.Contains("catalog", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(ws.Sent);
+    }
+
+    [Fact]
+    public async Task SendCommandAsync_RejectsConflictingSyncCatalogBeforeSending()
+    {
+        var channel = new WebSocketChannel(new WebSocketConfig());
+        var ws = new TestWebSocket();
+        Assert.True(channel.TryAddConnectionForTest("client", ws, IPAddress.Loopback, useJsonEnvelope: true));
+        var broker = CreateBroker(channel);
+        await broker.HandleClientEnvelopeAsync("client", ReadyWithCatalogs(
+            ["canvas.a2ui"],
+            [A2UiCatalogRegistry.OpenClawV08CatalogId, A2UiCatalogRegistry.AGenUiCatalogId]), CancellationToken.None);
+        await LockSurfaceCatalogThroughCreateAsync(broker, ws, "client", "sess", "surface-1", A2UiCatalogRegistry.OpenClawV08CatalogId);
+
+        var task = broker.SendCommandAsync(
+            Session("sess", "client"),
+            new WsServerEnvelope
+            {
+                Type = "a2ui_sync_ui_to_data",
+                SurfaceId = "surface-1",
+                CatalogId = A2UiCatalogRegistry.AGenUiCatalogId
+            },
+            "canvas_ack",
+            "canvas.a2ui",
+            CancellationToken.None);
+
+        if (await Task.WhenAny(task, Task.Delay(200)) != task)
+        {
+            var sent = await WaitForSentEnvelopeAsync(ws, skip: 1);
+            await AckAsync(broker, "client", sent, "sess");
+        }
+
+        var result = await task;
         Assert.False(result.Success);
         Assert.Contains("catalog", result.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Single(ws.Sent);

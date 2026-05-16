@@ -224,6 +224,25 @@ public sealed class CompanionCanvasTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyCanvasEnvelope_V09SnapshotOmitsNonObjectDataModel()
+    {
+        var (viewModel, ws) = CreateViewModel();
+        await ApplyCanvasEnvelopeAsync(viewModel, CreateSurfaceEnvelope("alpha", "Alpha", [TextComponent("alpha-text", "Alpha")], "[1,2]"));
+
+        await ApplyCanvasEnvelopeAsync(viewModel, new WsServerEnvelope
+        {
+            Type = "canvas_snapshot",
+            RequestId = "snap-alpha",
+            SessionId = "sess",
+            SurfaceId = "alpha"
+        });
+
+        var snapshot = LastSentEnvelope(ws);
+        using var doc = JsonDocument.Parse(snapshot.SnapshotJson!);
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("dataModel").ValueKind);
+    }
+
+    [Fact]
     public async Task ApplyCanvasEnvelope_V09DataModelUpdateKeepsExistingComponents()
     {
         var (viewModel, _) = CreateViewModel();
@@ -286,6 +305,30 @@ public sealed class CompanionCanvasTests : IDisposable
         Assert.Equal("pull", result.SyncMode);
         Assert.Equal("{\"count\":2}", result.ValueJson);
         Assert.Null(result.DataModelJson);
+    }
+
+    [Fact]
+    public async Task ApplyCanvasEnvelope_V09SyncUiToDataIncludesSelectedChecklistOptions()
+    {
+        var (viewModel, ws) = CreateViewModel();
+        await ApplyCanvasEnvelopeAsync(viewModel, CreateSurfaceEnvelope("alpha", "Alpha", [
+            """{"type":"CheckBox","id":"checks","options":[{"label":"One","value":"one","selected":true},{"label":"Two","value":"two"},{"label":"Three","value":"three","selected":true}]}"""
+        ]));
+
+        await ApplyCanvasEnvelopeAsync(viewModel, new WsServerEnvelope
+        {
+            Type = "a2ui_sync_ui_to_data",
+            Operation = "syncUIToData",
+            RequestId = "sync-alpha",
+            SessionId = "sess",
+            SurfaceId = "alpha",
+            SyncMode = "pull"
+        });
+
+        var result = LastSentEnvelope(ws);
+        using var doc = JsonDocument.Parse(result.ValueJson!);
+        var values = doc.RootElement.GetProperty("checks").EnumerateArray().Select(static item => item.GetString()!).ToArray();
+        Assert.Equal(["one", "three"], values);
     }
 
     [Fact]

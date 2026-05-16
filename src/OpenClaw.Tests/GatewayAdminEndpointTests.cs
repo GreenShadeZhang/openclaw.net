@@ -5134,6 +5134,20 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task WebChat_A2UiReset_ClearsAllSurfaces()
+    {
+        var webChatHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/webchat.html"));
+        var html = await File.ReadAllTextAsync(webChatHtmlPath);
+        var normalizedHtml = html.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.Contains("function resetA2ui()", html, StringComparison.Ordinal);
+        Assert.Contains("canvasSurfaces.clear();", html, StringComparison.Ordinal);
+        Assert.Contains("activeCanvasSurfaceId = null;", html, StringComparison.Ordinal);
+        Assert.Contains("case 'a2ui_reset':\n                        resetA2ui();", normalizedHtml, StringComparison.Ordinal);
+        Assert.DoesNotContain("resetA2ui(env.surfaceId || 'main')", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AdminHtml_ExposesSetupVerifyAndFirstOperatorWizard()
     {
         var adminHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/admin.html"));
