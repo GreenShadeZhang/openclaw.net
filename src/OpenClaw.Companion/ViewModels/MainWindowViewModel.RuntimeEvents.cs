@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -57,7 +58,8 @@ public sealed partial class MainWindowViewModel
         IsRuntimeEventsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => RuntimeEventsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => RuntimeEventsStatus = status);
+            if (client is null)
                 return;
 
             var query = new RuntimeEventQuery
@@ -78,7 +80,15 @@ public sealed partial class MainWindowViewModel
                 ? "No runtime events match the current filters."
                 : $"{RuntimeEventRows.Count} runtime event{(RuntimeEventRows.Count == 1 ? "" : "s")} loaded.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            RuntimeEventsStatus = $"Runtime events load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            RuntimeEventsStatus = $"Runtime events load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             RuntimeEventsStatus = $"Runtime events load failed: {ex.Message}";
         }

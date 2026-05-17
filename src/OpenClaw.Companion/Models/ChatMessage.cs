@@ -23,17 +23,18 @@ public sealed record ChatMessage
     public bool IsUser => Role == ChatRole.User;
     public bool IsAssistant => Role == ChatRole.Assistant;
     public bool IsSystem => Role == ChatRole.System && !IsToolEvent && !IsError;
+    private string SafeText => Text ?? "";
     public bool IsToolEvent => Role == ChatRole.System &&
-        (Text.StartsWith("Agent invoked tool:", StringComparison.OrdinalIgnoreCase) ||
-         Text.Contains("tool approval", StringComparison.OrdinalIgnoreCase) ||
-         Text.Contains("requires operator approval", StringComparison.OrdinalIgnoreCase));
+        (SafeText.StartsWith("Agent invoked tool:", StringComparison.OrdinalIgnoreCase) ||
+         SafeText.Contains("tool approval", StringComparison.OrdinalIgnoreCase) ||
+         SafeText.Contains("requires operator approval", StringComparison.OrdinalIgnoreCase));
 
     public bool IsError => Role == ChatRole.System &&
-        (Text.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
-         Text.Contains(" failed", StringComparison.OrdinalIgnoreCase) ||
-         Text.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
-         Text.Contains("blocked", StringComparison.OrdinalIgnoreCase) ||
-         Text.Contains("denied", StringComparison.OrdinalIgnoreCase));
+        (SafeText.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
+         SafeText.Contains(" failed", StringComparison.OrdinalIgnoreCase) ||
+         SafeText.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
+         SafeText.Contains("blocked", StringComparison.OrdinalIgnoreCase) ||
+         SafeText.Contains("denied", StringComparison.OrdinalIgnoreCase));
 
     public bool IsStreamingPlaceholder => Role == ChatRole.Assistant && string.IsNullOrWhiteSpace(Text);
 }

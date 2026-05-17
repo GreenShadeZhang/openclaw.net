@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenClaw.Core.Models;
@@ -30,7 +31,8 @@ public sealed partial class MainWindowViewModel
         IsProvidersBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => ProvidersStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => ProvidersStatus = status);
+            if (client is null)
                 return;
 
             var providers = await client.GetIntegrationProvidersAsync(50, CancellationToken.None);
@@ -44,7 +46,15 @@ public sealed partial class MainWindowViewModel
                 : $"Routes: {providers.Routes.Count}; policies: {providers.Policies.Count}; recent turns: {providers.RecentTurns.Count}.";
             ProvidersStatus = $"Loaded {ProviderRouteRows.Count} provider route(s) and {ToolPresetRows.Count} tool preset(s).";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            ProvidersStatus = $"Providers load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            ProvidersStatus = $"Providers load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             ProvidersStatus = $"Providers load failed: {ex.Message}";
         }

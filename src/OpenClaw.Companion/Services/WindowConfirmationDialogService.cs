@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Threading;
 
 namespace OpenClaw.Companion.Services;
 
@@ -69,6 +70,14 @@ public sealed class WindowConfirmationDialogService(Window owner) : IConfirmatio
                 }
             }
         };
+
+        using var cancellationRegistration = cancellationToken.Register(() =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                result = false;
+                if (dialog.IsVisible)
+                    dialog.Close();
+            }));
 
         await dialog.ShowDialog(owner);
         return result && !cancellationToken.IsCancellationRequested;

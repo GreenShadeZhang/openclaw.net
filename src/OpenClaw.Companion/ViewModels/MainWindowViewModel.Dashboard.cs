@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenClaw.Core.Models;
@@ -52,7 +53,8 @@ public sealed partial class MainWindowViewModel
         IsDashboardBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => DashboardStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => DashboardStatus = status);
+            if (client is null)
                 return;
 
             var response = await client.GetIntegrationDashboardAsync(CancellationToken.None);
@@ -72,7 +74,15 @@ public sealed partial class MainWindowViewModel
             OnPropertyChanged(nameof(HasDashboardEvents));
             OnPropertyChanged(nameof(HasDashboardChannels));
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            DashboardStatus = $"Dashboard load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            DashboardStatus = $"Dashboard load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             DashboardStatus = $"Dashboard load failed: {ex.Message}";
         }

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenClaw.Core.Models;
@@ -50,9 +51,23 @@ public sealed partial class MainWindowViewModel
 
     partial void OnSelectedSessionChanged(SessionRow? value)
     {
-        if (value is not null)
-            _ = LoadSelectedSessionAsync(value);
+        if (value is null)
+        {
+            SelectedSessionDetail = "Select a session to inspect metadata and timeline.";
+            ReplaceItems(SessionTimelineRows, []);
+            OnPropertyChanged(nameof(HasSessionTimelineRows));
+            return;
+        }
+
+        _ = LoadSelectedSessionAsync(value);
     }
+
+    partial void OnSessionsSearchTextChanged(string value) => ResetSessionsPageForFilterChange();
+    partial void OnSessionsChannelIdChanged(string value) => ResetSessionsPageForFilterChange();
+    partial void OnSessionsSenderIdChanged(string value) => ResetSessionsPageForFilterChange();
+    partial void OnSessionsStateChanged(string value) => ResetSessionsPageForFilterChange();
+    partial void OnSessionsTagChanged(string value) => ResetSessionsPageForFilterChange();
+    partial void OnSessionsStarredOnlyChanged(bool value) => ResetSessionsPageForFilterChange();
 
     [RelayCommand]
     private async Task LoadSessionsAsync()
@@ -63,7 +78,8 @@ public sealed partial class MainWindowViewModel
         IsSessionsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => SessionsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => SessionsStatus = status);
+            if (client is null)
                 return;
 
             var query = new SessionListQuery
@@ -90,7 +106,15 @@ public sealed partial class MainWindowViewModel
                 ? "No sessions match the current filters."
                 : $"{rows.Count} session{(rows.Count == 1 ? "" : "s")} loaded.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            SessionsStatus = $"Sessions load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            SessionsStatus = $"Sessions load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             SessionsStatus = $"Sessions load failed: {ex.Message}";
         }
@@ -141,16 +165,21 @@ public sealed partial class MainWindowViewModel
 
     private async Task LoadSelectedSessionAsync(SessionRow row)
     {
+        var requestedSessionId = row.SessionId;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => SelectedSessionDetail = status) || client is null)
+            using var client = RequireIntegrationClient(status => SelectedSessionDetail = status);
+            if (client is null)
                 return;
 
-            var detail = await client.GetSessionAsync(row.SessionId, CancellationToken.None);
-            var timeline = await client.GetSessionTimelineAsync(row.SessionId, 100, CancellationToken.None);
+            var detail = await client.GetSessionAsync(requestedSessionId, CancellationToken.None);
+            var timeline = await client.GetSessionTimelineAsync(requestedSessionId, 100, CancellationToken.None);
+            if (SelectedSession?.SessionId != requestedSessionId)
+                return;
+
             SelectedSessionDetail = string.Join(Environment.NewLine, new[]
             {
-                $"Session: {row.SessionId}",
+                $"Session: {requestedSessionId}",
                 $"Channel: {row.ChannelId}",
                 $"Sender: {row.SenderId}",
                 $"State: {row.State}",
@@ -162,10 +191,24 @@ public sealed partial class MainWindowViewModel
             ReplaceItems(SessionTimelineRows, timeline.Events.Select(RuntimeEventRow.FromEntry));
             OnPropertyChanged(nameof(HasSessionTimelineRows));
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex) when (SelectedSession?.SessionId == requestedSessionId)
+        {
+            SelectedSessionDetail = $"Session detail load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex) when (SelectedSession?.SessionId == requestedSessionId)
         {
             SelectedSessionDetail = $"Session detail load failed: {ex.Message}";
         }
+        catch (InvalidOperationException ex) when (SelectedSession?.SessionId == requestedSessionId)
+        {
+            SelectedSessionDetail = $"Session detail load failed: {ex.Message}";
+        }
+    }
+
+    private void ResetSessionsPageForFilterChange()
+    {
+        if (SessionsPage != 1)
+            SessionsPage = 1;
     }
 
     private static SessionState? TryParseSessionState(string? state)

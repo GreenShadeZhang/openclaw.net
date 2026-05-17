@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenClaw.Client;
@@ -68,14 +67,14 @@ public sealed partial class MainWindowViewModel
     private OpenClawHttpClient? CreateIntegrationClient(out string? error)
         => CreateAdminClient(out error);
 
-    private bool RequireIntegrationClient(out OpenClawHttpClient? client, Action<string> setStatus)
+    private OpenClawHttpClient? RequireIntegrationClient(Action<string> setStatus)
     {
-        client = CreateIntegrationClient(out var error);
+        var client = CreateIntegrationClient(out var error);
         if (client is not null)
-            return true;
+            return client;
 
         setStatus(error ?? "Invalid gateway URL.");
-        return false;
+        return null;
     }
 
     private async Task<bool> ConfirmMutationAsync(string title, string message, string confirmText = "Continue")
@@ -98,17 +97,5 @@ public sealed partial class MainWindowViewModel
     {
         var items = values?.Where(static value => !string.IsNullOrWhiteSpace(value)).ToArray() ?? [];
         return items.Length == 0 ? "none" : string.Join(", ", items);
-    }
-
-    private static string ToIndentedJson<T>(T value)
-    {
-        try
-        {
-            return JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });
-        }
-        catch
-        {
-            return value?.ToString() ?? "";
-        }
     }
 }

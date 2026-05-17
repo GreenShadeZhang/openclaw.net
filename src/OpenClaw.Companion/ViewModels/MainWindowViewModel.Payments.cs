@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenClaw.Payments.Abstractions;
@@ -67,7 +68,8 @@ public sealed partial class MainWindowViewModel
         IsPaymentsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => PaymentsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => PaymentsStatus = status);
+            if (client is null)
                 return;
 
             var setup = await client.GetPaymentSetupStatusAsync(EmptyToNull(PaymentProvider), CancellationToken.None);
@@ -89,8 +91,22 @@ public sealed partial class MainWindowViewModel
             OnPropertyChanged(nameof(HasFundingSourceRows));
             PaymentsStatus = setup.Enabled ? "Payment setup loaded." : "Payments are disabled by configuration.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
         {
+            ReplaceItems(FundingSourceRows, []);
+            OnPropertyChanged(nameof(HasFundingSourceRows));
+            PaymentsStatus = $"Payment setup load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            ReplaceItems(FundingSourceRows, []);
+            OnPropertyChanged(nameof(HasFundingSourceRows));
+            PaymentsStatus = $"Payment setup load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            ReplaceItems(FundingSourceRows, []);
+            OnPropertyChanged(nameof(HasFundingSourceRows));
             PaymentsStatus = $"Payment setup load failed: {ex.Message}";
         }
         finally
@@ -117,7 +133,8 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            if (!RequireIntegrationClient(out var client, status => PaymentsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => PaymentsStatus = status);
+            if (client is null)
                 return;
 
             var handle = await client.IssueVirtualCardAsync(new VirtualCardRequest
@@ -133,7 +150,15 @@ public sealed partial class MainWindowViewModel
             PaymentResultText = $"Virtual card issued: {handle.HandleId} · {handle.Status} · last4 {handle.Last4 ?? "masked"}";
             PaymentsStatus = "Virtual card request completed.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            PaymentsStatus = $"Virtual card request canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            PaymentsStatus = $"Virtual card request failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             PaymentsStatus = $"Virtual card request failed: {ex.Message}";
         }
@@ -157,7 +182,8 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            if (!RequireIntegrationClient(out var client, status => PaymentsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => PaymentsStatus = status);
+            if (client is null)
                 return;
 
             var result = await client.ExecuteMachinePaymentAsync(new MachinePaymentRequest
@@ -176,7 +202,15 @@ public sealed partial class MainWindowViewModel
             PaymentResultText = $"Payment {result.PaymentId}: {result.Status} · {result.MerchantName} · {result.AmountMinor} {result.Currency}";
             PaymentsStatus = "Payment execution completed.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            PaymentsStatus = $"Payment execution canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            PaymentsStatus = $"Payment execution failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             PaymentsStatus = $"Payment execution failed: {ex.Message}";
         }
@@ -193,14 +227,23 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            if (!RequireIntegrationClient(out var client, status => PaymentsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => PaymentsStatus = status);
+            if (client is null)
                 return;
 
             var status = await client.GetPaymentStatusAsync(PaymentStatusLookupId, EmptyToNull(PaymentProvider), EmptyToNull(PaymentEnvironment), CancellationToken.None);
             PaymentResultText = $"Payment {status.PaymentId}: {status.Status} · {status.MerchantName ?? ""} · {status.AmountMinor?.ToString() ?? ""} {status.Currency ?? ""}";
             PaymentsStatus = "Payment status loaded.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            PaymentsStatus = $"Payment status lookup canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            PaymentsStatus = $"Payment status lookup failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             PaymentsStatus = $"Payment status lookup failed: {ex.Message}";
         }

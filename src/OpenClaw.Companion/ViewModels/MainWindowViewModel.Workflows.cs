@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -48,7 +49,8 @@ public sealed partial class MainWindowViewModel
         IsWorkflowsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => WorkflowsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => WorkflowsStatus = status);
+            if (client is null)
                 return;
 
             var response = await client.ListWorkflowsAsync(CancellationToken.None);
@@ -56,7 +58,15 @@ public sealed partial class MainWindowViewModel
             OnPropertyChanged(nameof(HasWorkflowRows));
             WorkflowsStatus = WorkflowRows.Count == 0 ? "No workflows configured." : $"{WorkflowRows.Count} workflow(s) loaded.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            WorkflowsStatus = $"Workflows load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            WorkflowsStatus = $"Workflows load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             WorkflowsStatus = $"Workflows load failed: {ex.Message}";
         }
@@ -69,6 +79,8 @@ public sealed partial class MainWindowViewModel
     [RelayCommand]
     private async Task RunSelectedWorkflowAsync()
     {
+        if (IsWorkflowsBusy)
+            return;
         if (SelectedWorkflow is null)
             return;
         if (string.IsNullOrWhiteSpace(WorkflowInput))
@@ -84,9 +96,11 @@ public sealed partial class MainWindowViewModel
         if (!confirmed)
             return;
 
+        IsWorkflowsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => WorkflowsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => WorkflowsStatus = status);
+            if (client is null)
                 return;
 
             var result = await client.RunWorkflowAsync(SelectedWorkflow.WorkflowId, new AgentWorkflowRequest
@@ -99,41 +113,80 @@ public sealed partial class MainWindowViewModel
             WorkflowRunId = result.RunId;
             WorkflowRunDetail = BuildWorkflowRunText(result.WorkflowId, result.RunId, result.Status, result.BackendId, result.Output, result.Error);
             ReplaceItems(WorkflowEventRows, result.Events.Select(WorkflowEventRow.FromEvent));
-            ReplaceItems(WorkflowPendingInputs, []);
+            if (string.Equals(result.Status, AgentWorkflowStatuses.WaitingForInput, StringComparison.OrdinalIgnoreCase))
+            {
+                var snapshot = await client.GetWorkflowRunAsync(result.WorkflowId, result.RunId, CancellationToken.None);
+                ApplyWorkflowSnapshot(snapshot);
+            }
+            else
+            {
+                ReplaceItems(WorkflowPendingInputs, []);
+                SelectedWorkflowPendingInput = null;
+            }
             OnPropertyChanged(nameof(HasWorkflowEventRows));
             OnPropertyChanged(nameof(HasWorkflowPendingInputs));
             WorkflowsStatus = $"Workflow run '{result.RunId}' returned {result.Status}.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            WorkflowsStatus = $"Workflow run canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
         {
             WorkflowsStatus = $"Workflow run failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            WorkflowsStatus = $"Workflow run failed: {ex.Message}";
+        }
+        finally
+        {
+            IsWorkflowsBusy = false;
         }
     }
 
     [RelayCommand]
     private async Task LoadWorkflowRunAsync()
     {
+        if (IsWorkflowsBusy)
+            return;
         if (SelectedWorkflow is null || string.IsNullOrWhiteSpace(WorkflowRunId))
             return;
 
+        IsWorkflowsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => WorkflowsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => WorkflowsStatus = status);
+            if (client is null)
                 return;
 
             var snapshot = await client.GetWorkflowRunAsync(SelectedWorkflow.WorkflowId, WorkflowRunId, CancellationToken.None);
             ApplyWorkflowSnapshot(snapshot);
             WorkflowsStatus = $"Workflow run '{snapshot.RunId}' loaded.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            WorkflowsStatus = $"Workflow run load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
         {
             WorkflowsStatus = $"Workflow run load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            WorkflowsStatus = $"Workflow run load failed: {ex.Message}";
+        }
+        finally
+        {
+            IsWorkflowsBusy = false;
         }
     }
 
     [RelayCommand]
     private async Task RespondWorkflowInputAsync()
     {
+        if (IsWorkflowsBusy)
+            return;
         if (SelectedWorkflow is null || SelectedWorkflowPendingInput is null || string.IsNullOrWhiteSpace(WorkflowRunId))
             return;
 
@@ -144,9 +197,12 @@ public sealed partial class MainWindowViewModel
         if (!confirmed)
             return;
 
+        var portId = SelectedWorkflowPendingInput.PortId;
+        IsWorkflowsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => WorkflowsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => WorkflowsStatus = status);
+            if (client is null)
                 return;
 
             JsonElement? payload = null;
@@ -158,16 +214,32 @@ public sealed partial class MainWindowViewModel
 
             var snapshot = await client.RespondWorkflowRunAsync(SelectedWorkflow.WorkflowId, WorkflowRunId, new AgentWorkflowResponse
             {
-                PortId = SelectedWorkflowPendingInput.PortId,
+                PortId = portId,
                 Payload = payload,
                 ActorId = string.IsNullOrWhiteSpace(Username) ? "companion" : Username
             }, CancellationToken.None);
             ApplyWorkflowSnapshot(snapshot);
-            WorkflowsStatus = $"Workflow response sent to '{SelectedWorkflowPendingInput.PortId}'.";
+            WorkflowsStatus = $"Workflow response sent to '{portId}'.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            WorkflowsStatus = $"Workflow response canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
         {
             WorkflowsStatus = $"Workflow response failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            WorkflowsStatus = $"Workflow response failed: {ex.Message}";
+        }
+        catch (JsonException ex)
+        {
+            WorkflowsStatus = $"Workflow response failed: {ex.Message}";
+        }
+        finally
+        {
+            IsWorkflowsBusy = false;
         }
     }
 
@@ -176,7 +248,11 @@ public sealed partial class MainWindowViewModel
         WorkflowRunId = snapshot.RunId;
         WorkflowRunDetail = BuildWorkflowRunText(snapshot.WorkflowId, snapshot.RunId, snapshot.Status, snapshot.BackendId, snapshot.Output, snapshot.Error);
         ReplaceItems(WorkflowEventRows, snapshot.Events.Select(WorkflowEventRow.FromEvent));
+        var selectedPortId = SelectedWorkflowPendingInput?.PortId;
         ReplaceItems(WorkflowPendingInputs, snapshot.PendingInputs.Select(WorkflowPendingInputRow.FromInput));
+        SelectedWorkflowPendingInput = selectedPortId is null
+            ? null
+            : WorkflowPendingInputs.FirstOrDefault(input => string.Equals(input.PortId, selectedPortId, StringComparison.Ordinal));
         OnPropertyChanged(nameof(HasWorkflowEventRows));
         OnPropertyChanged(nameof(HasWorkflowPendingInputs));
     }

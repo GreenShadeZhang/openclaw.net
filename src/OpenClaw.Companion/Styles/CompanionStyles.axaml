@@ -46,7 +46,9 @@
     </Style>
 
     <Style Selector="Button.danger">
-        <Setter Property="Foreground" Value="#ff453a" />
+        <Setter Property="Background" Value="#a61f1f" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="BorderBrush" Value="#a61f1f" />
     </Style>
 
     <Style Selector="Border.empty-state">
@@ -62,5 +64,9 @@
         <Setter Property="Background" Value="#3a1515" />
         <Setter Property="BorderBrush" Value="#ff453a" />
         <Setter Property="BorderThickness" Value="1" />
+    </Style>
+
+    <Style Selector="Border.error-banner TextBlock">
+        <Setter Property="Foreground" Value="White" />
     </Style>
 </Styles>

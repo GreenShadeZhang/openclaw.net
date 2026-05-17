@@ -56,8 +56,10 @@ public sealed class CompanionCanvasUiTests : IDisposable
             Dispatcher.UIThread.RunJobs();
 
             var tabControl = window.GetVisualDescendants().OfType<TabControl>().Single();
-            tabControl.SelectedIndex = 3;
+            var canvasTab = GetTabByHeader(tabControl, "Canvas");
+            tabControl.SelectedItem = canvasTab;
             Dispatcher.UIThread.RunJobs();
+            Assert.Same(canvasTab, tabControl.SelectedItem);
 
             var selector = window.FindControl<ComboBox>("CanvasSurfaceSelector");
             Assert.NotNull(selector);
@@ -110,11 +112,13 @@ public sealed class CompanionCanvasUiTests : IDisposable
             Assert.Contains("Plugins & Channels", headers);
             Assert.Contains("Payment Lab", headers);
 
-            tabControl.SelectedIndex = 4;
+            var sessionsTab = GetTabByHeader(tabControl, "Sessions");
+            tabControl.SelectedItem = sessionsTab;
             Dispatcher.UIThread.RunJobs();
 
-            Assert.Equal(4, viewModel.SelectedSectionIndex);
-            Assert.Contains(window.GetVisualDescendants().OfType<TextBlock>(), text => string.Equals(text.Text, "Sessions", StringComparison.Ordinal));
+            Assert.Same(sessionsTab, tabControl.SelectedItem);
+            Assert.Equal(Array.IndexOf(headers, "Sessions"), viewModel.SelectedSectionIndex);
+            Assert.Same(sessionsTab.Content, tabControl.SelectedContent);
         }
         finally
         {
@@ -132,6 +136,11 @@ public sealed class CompanionCanvasUiTests : IDisposable
         client.SetConnectedSocketForTest(new TestWebSocket());
         return new MainWindowViewModel(new SettingsStore(dir), client);
     }
+
+    private static TabItem GetTabByHeader(TabControl tabControl, string header)
+        => tabControl.Items
+            .OfType<TabItem>()
+            .Single(item => string.Equals(item.Header?.ToString(), header, StringComparison.Ordinal));
 
     private static WsServerEnvelope CreateSurfaceEnvelope(string surfaceId, string title, string[] components)
         => new()

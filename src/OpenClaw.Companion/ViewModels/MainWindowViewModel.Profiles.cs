@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenClaw.Core.Models;
@@ -31,8 +32,13 @@ public sealed partial class MainWindowViewModel
 
     partial void OnSelectedProfileChanged(ProfileRow? value)
     {
-        if (value is not null)
-            _ = LoadProfileDetailAsync(value.ActorId);
+        if (value is null)
+        {
+            SelectedProfileDetail = "Select a profile to inspect detail.";
+            return;
+        }
+
+        _ = LoadProfileDetailAsync(value.ActorId);
     }
 
     [RelayCommand]
@@ -44,7 +50,8 @@ public sealed partial class MainWindowViewModel
         IsProfilesBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => ProfilesStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => ProfilesStatus = status);
+            if (client is null)
                 return;
 
             var profiles = await client.ListProfilesAsync(CancellationToken.None);
@@ -58,7 +65,15 @@ public sealed partial class MainWindowViewModel
             OnPropertyChanged(nameof(HasLearningProposalRows));
             ProfilesStatus = $"Loaded {ProfileRows.Count} profile(s), {MemoryNoteRows.Count} memory note(s), and {LearningProposalRows.Count} proposal(s).";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            ProfilesStatus = $"Memory and profiles load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            ProfilesStatus = $"Memory and profiles load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             ProfilesStatus = $"Memory and profiles load failed: {ex.Message}";
         }
@@ -77,7 +92,8 @@ public sealed partial class MainWindowViewModel
         IsProfilesBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => ProfilesStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => ProfilesStatus = status);
+            if (client is null)
                 return;
 
             var notes = await client.SearchMemoryNotesAsync(MemorySearchText, memoryClass: null, projectId: null, limit: 50, CancellationToken.None);
@@ -85,7 +101,15 @@ public sealed partial class MainWindowViewModel
             OnPropertyChanged(nameof(HasMemoryNoteRows));
             ProfilesStatus = MemoryNoteRows.Count == 0 ? "No memory notes matched the search." : $"{MemoryNoteRows.Count} memory note(s) matched.";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            ProfilesStatus = $"Memory search canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            ProfilesStatus = $"Memory search failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             ProfilesStatus = $"Memory search failed: {ex.Message}";
         }
@@ -99,10 +123,14 @@ public sealed partial class MainWindowViewModel
     {
         try
         {
-            if (!RequireIntegrationClient(out var client, status => SelectedProfileDetail = status) || client is null)
+            using var client = RequireIntegrationClient(status => SelectedProfileDetail = status);
+            if (client is null)
                 return;
 
             var detail = await client.GetProfileAsync(actorId, CancellationToken.None);
+            if (SelectedProfile?.ActorId != actorId)
+                return;
+
             SelectedProfileDetail = detail.Profile is null
                 ? "Profile not found."
                 : string.Join(Environment.NewLine, new[]
@@ -118,7 +146,15 @@ public sealed partial class MainWindowViewModel
                     $"Active projects: {JoinCompact(detail.Profile.ActiveProjects)}"
                 });
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex) when (SelectedProfile?.ActorId == actorId)
+        {
+            SelectedProfileDetail = $"Profile detail load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex) when (SelectedProfile?.ActorId == actorId)
+        {
+            SelectedProfileDetail = $"Profile detail load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex) when (SelectedProfile?.ActorId == actorId)
         {
             SelectedProfileDetail = $"Profile detail load failed: {ex.Message}";
         }

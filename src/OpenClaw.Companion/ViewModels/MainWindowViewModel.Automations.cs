@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenClaw.Core.Models;
@@ -31,8 +32,15 @@ public sealed partial class MainWindowViewModel
 
     partial void OnSelectedAutomationChanged(AutomationRow? value)
     {
-        if (value is not null)
-            _ = LoadAutomationDetailAsync(value.AutomationId);
+        if (value is null)
+        {
+            AutomationDetail = "Select an automation to inspect run state.";
+            ReplaceItems(AutomationRunRows, []);
+            OnPropertyChanged(nameof(HasAutomationRunRows));
+            return;
+        }
+
+        _ = LoadAutomationDetailAsync(value.AutomationId);
     }
 
     [RelayCommand]
@@ -44,7 +52,8 @@ public sealed partial class MainWindowViewModel
         IsAutomationsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => AutomationsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => AutomationsStatus = status);
+            if (client is null)
                 return;
 
             var automations = await client.ListAutomationsAsync(CancellationToken.None);
@@ -55,7 +64,15 @@ public sealed partial class MainWindowViewModel
             OnPropertyChanged(nameof(HasAutomationTemplateRows));
             AutomationsStatus = $"Loaded {AutomationRows.Count} automation(s) and {AutomationTemplateRows.Count} template(s).";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            AutomationsStatus = $"Automations load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            AutomationsStatus = $"Automations load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             AutomationsStatus = $"Automations load failed: {ex.Message}";
         }
@@ -105,14 +122,25 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            if (!RequireIntegrationClient(out var client, status => AutomationsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => AutomationsStatus = status);
+            if (client is null)
                 return;
 
             var result = await client.DeleteAutomationAsync(SelectedAutomation.AutomationId, CancellationToken.None);
-            AutomationsStatus = result.Success ? result.Message : result.Error ?? "Automation delete failed.";
-            await LoadAutomationsAsync();
+            var mutationStatus = result.Success ? result.Message : result.Error ?? "Automation delete failed.";
+            if (result.Success)
+                await LoadAutomationsAsync();
+            AutomationsStatus = mutationStatus;
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            AutomationsStatus = $"Automation delete canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            AutomationsStatus = $"Automation delete failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             AutomationsStatus = $"Automation delete failed: {ex.Message}";
         }
@@ -133,14 +161,23 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            if (!RequireIntegrationClient(out var client, status => AutomationsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => AutomationsStatus = status);
+            if (client is null)
                 return;
 
             var result = await client.ReplayAutomationRunAsync(SelectedAutomation.AutomationId, SelectedAutomationRun.RunId, CancellationToken.None);
             AutomationsStatus = result.Success ? result.Message : result.Error ?? "Automation replay failed.";
             await LoadAutomationDetailAsync(SelectedAutomation.AutomationId);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            AutomationsStatus = $"Automation replay canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            AutomationsStatus = $"Automation replay failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             AutomationsStatus = $"Automation replay failed: {ex.Message}";
         }
@@ -161,14 +198,23 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            if (!RequireIntegrationClient(out var client, status => AutomationsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => AutomationsStatus = status);
+            if (client is null)
                 return;
 
             var result = await client.ClearAutomationQuarantineAsync(SelectedAutomation.AutomationId, CancellationToken.None);
             AutomationsStatus = result.Success ? result.Message : result.Error ?? "Clear quarantine failed.";
             await LoadAutomationDetailAsync(SelectedAutomation.AutomationId);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            AutomationsStatus = $"Clear quarantine canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            AutomationsStatus = $"Clear quarantine failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             AutomationsStatus = $"Clear quarantine failed: {ex.Message}";
         }
@@ -178,14 +224,23 @@ public sealed partial class MainWindowViewModel
     {
         try
         {
-            if (!RequireIntegrationClient(out var client, status => AutomationsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => AutomationsStatus = status);
+            if (client is null)
                 return;
 
             var result = await client.RunAutomationAsync(automationId, dryRun, CancellationToken.None);
             AutomationsStatus = result.Success ? result.Message : result.Error ?? "Automation run failed.";
             await LoadAutomationDetailAsync(automationId);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            AutomationsStatus = $"Automation run canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            AutomationsStatus = $"Automation run failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             AutomationsStatus = $"Automation run failed: {ex.Message}";
         }
@@ -195,11 +250,15 @@ public sealed partial class MainWindowViewModel
     {
         try
         {
-            if (!RequireIntegrationClient(out var client, status => AutomationDetail = status) || client is null)
+            using var client = RequireIntegrationClient(status => AutomationDetail = status);
+            if (client is null)
                 return;
 
             var detail = await client.GetAutomationAsync(automationId, CancellationToken.None);
             var runs = await client.GetAutomationRunsAsync(automationId, CancellationToken.None);
+            if (SelectedAutomation?.AutomationId != automationId)
+                return;
+
             AutomationDetail = detail.Automation is null
                 ? "Automation not found."
                 : string.Join(Environment.NewLine, new[]
@@ -217,7 +276,15 @@ public sealed partial class MainWindowViewModel
             ReplaceItems(AutomationRunRows, runs.Items.Select(AutomationRunRow.FromRecord));
             OnPropertyChanged(nameof(HasAutomationRunRows));
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex) when (SelectedAutomation?.AutomationId == automationId)
+        {
+            AutomationDetail = $"Automation detail load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex) when (SelectedAutomation?.AutomationId == automationId)
+        {
+            AutomationDetail = $"Automation detail load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex) when (SelectedAutomation?.AutomationId == automationId)
         {
             AutomationDetail = $"Automation detail load failed: {ex.Message}";
         }

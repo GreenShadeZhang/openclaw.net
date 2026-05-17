@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenClaw.Core.Models;
@@ -29,7 +30,8 @@ public sealed partial class MainWindowViewModel
         IsPluginsBusy = true;
         try
         {
-            if (!RequireIntegrationClient(out var client, status => PluginsStatus = status) || client is null)
+            using var client = RequireIntegrationClient(status => PluginsStatus = status);
+            if (client is null)
                 return;
 
             var plugins = await client.GetIntegrationPluginsAsync(CancellationToken.None);
@@ -44,7 +46,15 @@ public sealed partial class MainWindowViewModel
             OnPropertyChanged(nameof(HasPluginChannelRows));
             PluginsStatus = $"Loaded {PluginRows.Count} plugin(s), {CompatibilityRows.Count} compatibility item(s), and {PluginChannelRows.Count} channel(s).";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException ex)
+        {
+            PluginsStatus = $"Plugins load canceled: {ex.Message}";
+        }
+        catch (HttpRequestException ex)
+        {
+            PluginsStatus = $"Plugins load failed: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             PluginsStatus = $"Plugins load failed: {ex.Message}";
         }
