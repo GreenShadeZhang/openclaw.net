@@ -235,6 +235,87 @@ public sealed class MafAdapterTests
     }
 
     [Fact]
+    public async Task MafAgentRuntime_FiltersToolsByPresetResolver()
+    {
+        var services = new ServiceCollection()
+            .AddSingleton<IToolPresetResolver>(new TestToolPresetResolver(["echo_tool"]))
+            .BuildServiceProvider();
+        var executionService = new CapturingLlmExecutionService();
+        var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-maf-preset-filter-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var runtime = new MafAgentRuntime(
+                new AgentRuntimeFactoryContext
+                {
+                    Services = services,
+                    Config = new GatewayConfig
+                    {
+                        Memory = new MemoryConfig
+                        {
+                            StoragePath = storagePath
+                        },
+                        Llm = new LlmProviderConfig
+                        {
+                            Provider = "test-maf",
+                            Model = "maf-test-model"
+                        }
+                    },
+                    RuntimeState = new GatewayRuntimeState
+                    {
+                        RequestedMode = "jit",
+                        EffectiveMode = GatewayRuntimeMode.Jit,
+                        DynamicCodeSupported = true
+                    },
+                    ChatClient = new MafTestChatClient(),
+                    Tools = [new TestTool("echo_tool"), new TestTool("shell")],
+                    MemoryStore = new FileMemoryStore(storagePath, 4),
+                    RuntimeMetrics = new RuntimeMetrics(),
+                    ProviderUsage = new ProviderUsageTracker(),
+                    LlmExecutionService = executionService,
+                    Skills = [],
+                    SkillsConfig = new SkillsConfig(),
+                    WorkspacePath = null,
+                    PluginSkillDirs = [],
+                    Logger = NullLogger.Instance,
+                    Hooks = [],
+                    RequireToolApproval = false,
+                    ApprovalRequiredTools = [],
+                    IsContractTokenBudgetExceeded = null,
+                    IsContractRuntimeBudgetExceeded = null,
+                    RecordContractTurnUsage = null,
+                    AppendContractSnapshot = null
+                },
+                new MafOptions(),
+                new MafAgentFactory(Options.Create(new MafOptions()), NullLoggerFactory.Instance, services),
+                new MafSessionStateStore(
+                    new GatewayConfig
+                    {
+                        Memory = new MemoryConfig
+                        {
+                            StoragePath = storagePath
+                        }
+                    },
+                    Options.Create(new MafOptions()),
+                    NullLogger<MafSessionStateStore>.Instance),
+                new MafTelemetryAdapter(),
+                NullLogger<MafAgentRuntime>.Instance);
+            var session = CreateSession("maf-preset-filter");
+            session.RoutePresetId = "test-preset";
+
+            await runtime.RunAsync(session, "use tools", CancellationToken.None);
+
+            var toolNames = executionService.LastToolNames;
+            Assert.Equal(["echo_tool"], toolNames);
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task MafSessionStateStore_HistoryHashMismatch_RebuildsFreshSession()
     {
         var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-maf-sidecar-tests", Guid.NewGuid().ToString("N"));
@@ -456,6 +537,28 @@ public sealed class MafAdapterTests
             _ = argumentsJson;
             _ = ct;
             return ValueTask.FromResult("ok");
+        }
+    }
+
+    private sealed class TestToolPresetResolver(IEnumerable<string> allowedTools) : IToolPresetResolver
+    {
+        private readonly ResolvedToolPreset _preset = new()
+        {
+            PresetId = "test-preset",
+            AllowedTools = allowedTools.ToHashSet(StringComparer.OrdinalIgnoreCase)
+        };
+
+        public ResolvedToolPreset Resolve(Session session, IEnumerable<string> availableToolNames)
+        {
+            _ = session;
+            _ = availableToolNames;
+            return _preset;
+        }
+
+        public IReadOnlyList<ResolvedToolPreset> ListPresets(IEnumerable<string> availableToolNames)
+        {
+            _ = availableToolNames;
+            return [_preset];
         }
     }
 
