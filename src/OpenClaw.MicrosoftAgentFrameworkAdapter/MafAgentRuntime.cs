@@ -46,6 +46,7 @@ public sealed class MafAgentRuntime : IAgentRuntime
     private readonly string? _memoryRecallPrefix;
     private readonly object _skillGate = new();
     private readonly IList<AITool> _mafTools;
+    private readonly IReadOnlyDictionary<string, AITool> _mafToolsByName;
     private string _systemPrompt = string.Empty;
     private string[] _loadedSkillNames = [];
     private int _systemPromptLength;
@@ -108,6 +109,7 @@ public sealed class MafAgentRuntime : IAgentRuntime
         _mafTools = context.Tools
             .Select(tool => (AITool)new MafToolAdapter(tool, _toolExecutor))
             .ToArray();
+        _mafToolsByName = _mafTools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
 
         ApplySkills(context.Skills);
     }
@@ -340,7 +342,10 @@ public sealed class MafAgentRuntime : IAgentRuntime
 
     private ChatClientAgent CreateAgent(Session session)
     {
-        return _agentFactory.Create(_chatClient, GetSystemPrompt(session), _mafTools);
+        var tools = _toolExecutor.GetToolDeclarations(session)
+            .Select(tool => _mafToolsByName[tool.Name])
+            .ToArray();
+        return _agentFactory.Create(_chatClient, GetSystemPrompt(session), tools);
     }
 
     private async Task ProduceStreamingRunAsync(
