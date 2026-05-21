@@ -1,0 +1,158 @@
+using System.Text;
+using System.Text.Json;
+using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
+
+namespace OpenClaw.Core.Features;
+
+public sealed class FileHarnessContractStore : IHarnessContractStore
+{
+    private readonly string _contractsPath;
+
+    public FileHarnessContractStore(string storagePath)
+    {
+        var root = Path.GetFullPath(storagePath);
+        _contractsPath = Path.Combine(root, "harness", "contracts");
+        Directory.CreateDirectory(_contractsPath);
+    }
+
+    public ValueTask SaveAsync(HarnessContract contract, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(contract);
+        EnsureSafeId(contract.Id);
+        return SaveOneAsync(PathForId(contract.Id), contract, ct);
+    }
+
+    public ValueTask<HarnessContract?> GetAsync(string id, CancellationToken ct)
+    {
+        EnsureSafeId(id);
+        return LoadOneAsync(PathForId(id), ct);
+    }
+
+    public async ValueTask<IReadOnlyList<HarnessContract>> ListAsync(HarnessContractListQuery query, CancellationToken ct)
+    {
+        query ??= new HarnessContractListQuery();
+        var results = new List<HarnessContract>();
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(_contractsPath, "*.json");
+        }
+        catch
+        {
+            return [];
+        }
+
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            var contract = await LoadOneAsync(file, ct);
+            if (contract is not null && Matches(contract, query))
+                results.Add(contract);
+        }
+
+        var limit = Math.Clamp(query.Limit, 1, 500);
+        return results
+            .OrderByDescending(static item => item.UpdatedAtUtc)
+            .ThenByDescending(static item => item.CreatedAtUtc)
+            .Take(limit)
+            .ToArray();
+    }
+
+    public ValueTask DeleteAsync(string id, CancellationToken ct)
+    {
+        EnsureSafeId(id);
+        var path = PathForId(id);
+        if (File.Exists(path))
+            File.Delete(path);
+        return ValueTask.CompletedTask;
+    }
+
+    private string PathForId(string id)
+        => Path.Combine(_contractsPath, $"{EncodeKey(id)}.json");
+
+    private static bool Matches(HarnessContract contract, HarnessContractListQuery query)
+    {
+        if (!string.IsNullOrWhiteSpace(query.Status) &&
+            !string.Equals(contract.Status, query.Status, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(query.RiskLevel) &&
+            !string.Equals(contract.RiskLevel, query.RiskLevel, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(query.SourceSessionId) &&
+            !string.Equals(contract.SourceSessionId, query.SourceSessionId, StringComparison.Ordinal))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(query.ActorId) &&
+            !string.Equals(contract.ActorId, query.ActorId, StringComparison.Ordinal))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(query.ChannelId) &&
+            !string.Equals(contract.ChannelId, query.ChannelId, StringComparison.Ordinal))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(query.Tag) &&
+            !contract.Tags.Any(tag => string.Equals(tag, query.Tag, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        if (query.CreatedFromUtc is { } fromUtc && contract.CreatedAtUtc < fromUtc)
+            return false;
+
+        if (query.CreatedToUtc is { } toUtc && contract.CreatedAtUtc > toUtc)
+            return false;
+
+        return true;
+    }
+
+    private static async ValueTask<HarnessContract?> LoadOneAsync(string path, CancellationToken ct)
+    {
+        if (!File.Exists(path))
+            return default;
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(path, ct);
+            return JsonSerializer.Deserialize(json, CoreJsonContext.Default.HarnessContract);
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    private static async ValueTask SaveOneAsync(string path, HarnessContract contract, CancellationToken ct)
+    {
+        var tempPath = $"{path}.tmp";
+        var json = JsonSerializer.Serialize(contract, CoreJsonContext.Default.HarnessContract);
+        await File.WriteAllTextAsync(tempPath, json, Encoding.UTF8, ct);
+        File.Move(tempPath, path, overwrite: true);
+    }
+
+    private static void EnsureSafeId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            throw new ArgumentException("Harness contract id is required.", nameof(id));
+
+        if (id.Length > 128)
+            throw new ArgumentException("Harness contract id is too long.", nameof(id));
+
+        foreach (var ch in id)
+        {
+            if (char.IsLetterOrDigit(ch) || ch is '_' or '-' or '.')
+                continue;
+
+            throw new ArgumentException("Harness contract id contains unsafe characters.", nameof(id));
+        }
+    }
+
+    private static string EncodeKey(string key)
+    {
+        var bytes = Encoding.UTF8.GetBytes(key);
+        return Convert.ToBase64String(bytes)
+            .Replace('+', '-')
+            .Replace('/', '_')
+            .TrimEnd('=');
+    }
+}
