@@ -193,7 +193,13 @@ public sealed class HarnessContractTests
 
     private static string CreateTempDir()
     {
-        var path = Path.Combine(Path.GetTempPath(), "openclaw-harness-contract-tests", Guid.NewGuid().ToString("N"));
+        var baseDir = Path.Join(Path.GetTempPath(), "openclaw-harness-contract-tests");
+        var leaf = Guid.NewGuid().ToString("N");
+        var safeLeaf = Path.GetFileName(leaf);
+        if (!string.Equals(leaf, safeLeaf, StringComparison.Ordinal))
+            throw new InvalidOperationException("Generated temp directory leaf was not a file-name-only value.");
+
+        var path = Path.Join(baseDir, safeLeaf);
         Directory.CreateDirectory(path);
         return path;
     }

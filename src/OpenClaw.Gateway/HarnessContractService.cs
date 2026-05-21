@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
@@ -112,10 +113,9 @@ internal sealed class HarnessContractService
                 risk = MaxRisk(risk, HarnessContractRiskLevels.High);
         }
 
-        foreach (var tool in contract.ToolsRequired)
+        foreach (var tool in contract.ToolsRequired.Where(static tool => IsHighRiskToolOrAction(tool.ToolName, "", [])))
         {
-            if (IsHighRiskToolOrAction(tool.ToolName, "", []))
-                risk = MaxRisk(risk, HarnessContractRiskLevels.High);
+            risk = MaxRisk(risk, HarnessContractRiskLevels.High);
         }
 
         return risk;

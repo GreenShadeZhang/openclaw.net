@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using OpenClaw.Core.Abstractions;
@@ -8,11 +9,15 @@ namespace OpenClaw.Core.Features;
 public sealed class FileHarnessContractStore : IHarnessContractStore
 {
     private readonly string _contractsPath;
+    private readonly string _contractsPathPrefix;
 
     public FileHarnessContractStore(string storagePath)
     {
         var root = Path.GetFullPath(storagePath);
-        _contractsPath = Path.Combine(root, "harness", "contracts");
+        _contractsPath = Path.GetFullPath(Path.Join(root, "harness", "contracts"));
+        _contractsPathPrefix = _contractsPath.EndsWith(Path.DirectorySeparatorChar)
+            ? _contractsPath
+            : _contractsPath + Path.DirectorySeparatorChar;
         Directory.CreateDirectory(_contractsPath);
     }
 
@@ -38,7 +43,15 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
         {
             files = Directory.EnumerateFiles(_contractsPath, "*.json");
         }
-        catch
+        catch (DirectoryNotFoundException)
+        {
+            return [];
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return [];
+        }
+        catch (IOException)
         {
             return [];
         }
@@ -69,7 +82,18 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
     }
 
     private string PathForId(string id)
-        => Path.Combine(_contractsPath, $"{EncodeKey(id)}.json");
+    {
+        var expectedFileName = $"{EncodeKey(id)}.json";
+        var fileName = Path.GetFileName(expectedFileName);
+        if (string.IsNullOrWhiteSpace(fileName) || !string.Equals(fileName, expectedFileName, StringComparison.Ordinal))
+            throw new ArgumentException("Harness contract id resolves to an unsafe file name.", nameof(id));
+
+        var path = Path.GetFullPath(Path.Join(_contractsPath, fileName));
+        if (!path.StartsWith(_contractsPathPrefix, StringComparison.Ordinal))
+            throw new ArgumentException("Harness contract id resolves outside the contract store.", nameof(id));
+
+        return path;
+    }
 
     private static bool Matches(HarnessContract contract, HarnessContractListQuery query)
     {
@@ -116,7 +140,19 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
             var json = await File.ReadAllTextAsync(path, ct);
             return JsonSerializer.Deserialize(json, CoreJsonContext.Default.HarnessContract);
         }
-        catch
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (JsonException)
+        {
+            return default;
+        }
+        catch (IOException)
+        {
+            return default;
+        }
+        catch (UnauthorizedAccessException)
         {
             return default;
         }
@@ -138,13 +174,8 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
         if (id.Length > 128)
             throw new ArgumentException("Harness contract id is too long.", nameof(id));
 
-        foreach (var ch in id)
-        {
-            if (char.IsLetterOrDigit(ch) || ch is '_' or '-' or '.')
-                continue;
-
+        if (!id.All(static ch => char.IsLetterOrDigit(ch) || ch is '_' or '-' or '.'))
             throw new ArgumentException("Harness contract id contains unsafe characters.", nameof(id));
-        }
     }
 
     private static string EncodeKey(string key)
