@@ -25,23 +25,23 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
     {
         ArgumentNullException.ThrowIfNull(contract);
         EnsureSafeId(contract.Id);
-        return SaveOneAsync(PathForId(contract.Id), contract, ct);
+        return SaveOneAsync(FileForId(contract.Id), contract, ct);
     }
 
     public ValueTask<HarnessContract?> GetAsync(string id, CancellationToken ct)
     {
         EnsureSafeId(id);
-        return LoadOneAsync(PathForId(id), ct);
+        return LoadOneAsync(FileForId(id), ct);
     }
 
     public async ValueTask<IReadOnlyList<HarnessContract>> ListAsync(HarnessContractListQuery query, CancellationToken ct)
     {
         query ??= new HarnessContractListQuery();
         var results = new List<HarnessContract>();
-        IEnumerable<string> files;
+        IEnumerable<FileInfo> files;
         try
         {
-            files = Directory.EnumerateFiles(_contractsPath, "*.json");
+            files = new DirectoryInfo(_contractsPath).EnumerateFiles("*.json");
         }
         catch (DirectoryNotFoundException)
         {
@@ -75,13 +75,13 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
     public ValueTask DeleteAsync(string id, CancellationToken ct)
     {
         EnsureSafeId(id);
-        var path = PathForId(id);
-        if (File.Exists(path))
-            File.Delete(path);
+        var file = FileForId(id);
+        if (file.Exists)
+            file.Delete();
         return ValueTask.CompletedTask;
     }
 
-    private string PathForId(string id)
+    private FileInfo FileForId(string id)
     {
         var expectedFileName = $"{EncodeKey(id)}.json";
         var fileName = Path.GetFileName(expectedFileName);
@@ -92,7 +92,7 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
         if (!path.StartsWith(_contractsPathPrefix, StringComparison.Ordinal))
             throw new ArgumentException("Harness contract id resolves outside the contract store.", nameof(id));
 
-        return path;
+        return new FileInfo(path);
     }
 
     private static bool Matches(HarnessContract contract, HarnessContractListQuery query)
@@ -130,15 +130,15 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
         return true;
     }
 
-    private static async ValueTask<HarnessContract?> LoadOneAsync(string path, CancellationToken ct)
+    private static async ValueTask<HarnessContract?> LoadOneAsync(FileInfo file, CancellationToken ct)
     {
-        if (!File.Exists(path))
+        if (!file.Exists)
             return default;
 
         try
         {
-            var json = await File.ReadAllTextAsync(path, ct);
-            return JsonSerializer.Deserialize(json, CoreJsonContext.Default.HarnessContract);
+            await using var stream = file.OpenRead();
+            return await JsonSerializer.DeserializeAsync(stream, CoreJsonContext.Default.HarnessContract, ct);
         }
         catch (OperationCanceledException)
         {
@@ -158,12 +158,16 @@ public sealed class FileHarnessContractStore : IHarnessContractStore
         }
     }
 
-    private static async ValueTask SaveOneAsync(string path, HarnessContract contract, CancellationToken ct)
+    private static async ValueTask SaveOneAsync(FileInfo file, HarnessContract contract, CancellationToken ct)
     {
-        var tempPath = $"{path}.tmp";
-        var json = JsonSerializer.Serialize(contract, CoreJsonContext.Default.HarnessContract);
-        await File.WriteAllTextAsync(tempPath, json, Encoding.UTF8, ct);
-        File.Move(tempPath, path, overwrite: true);
+        file.Directory?.Create();
+        var tempFile = new FileInfo($"{file.FullName}.tmp");
+        await using (var stream = tempFile.Open(FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            await JsonSerializer.SerializeAsync(stream, contract, CoreJsonContext.Default.HarnessContract, ct);
+        }
+
+        tempFile.MoveTo(file.FullName, overwrite: true);
     }
 
     private static void EnsureSafeId(string id)
