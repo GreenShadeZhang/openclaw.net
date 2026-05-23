@@ -2172,9 +2172,9 @@ public sealed class GatewayAdminEndpointTests
             Assert.True(proposal.AutomationDraft.IsDraft);
             Assert.Equal("learning", proposal.AutomationDraft.Source);
             Assert.Equal(proposal.Id, proposal.AutomationDraft.CreatedByLearningProposalId);
-            Assert.Contains("过去 24 小时", proposal.AutomationDraft.Prompt, StringComparison.Ordinal);
+            Assert.Contains("past 24 hours", proposal.AutomationDraft.Prompt, StringComparison.Ordinal);
             Assert.Equal(AutomationSuggestionQualityDecisions.ReadyDraft, proposal.AutomationQuality!.Decision);
-            Assert.Contains("过去 24 小时", proposal.AutomationSuggestionPreview!.RefinedPrompt, StringComparison.Ordinal);
+            Assert.Contains("past 24 hours", proposal.AutomationSuggestionPreview!.RefinedPrompt, StringComparison.Ordinal);
         }
         finally
         {
@@ -2194,7 +2194,7 @@ public sealed class GatewayAdminEndpointTests
             ExpectedOutcome = "actionable_followup_list",
             CadenceHint = "daily",
             TriggerEvidence = [originalPrompt],
-            Ambiguities = ["当前会话在定时任务中没有稳定含义"]
+            Ambiguities = ["Current conversation has no stable meaning in a scheduled task."]
         };
         var refiner = new AutomationSuggestionRefiner();
         var candidate = refiner.Refine(originalPrompt, intent);
@@ -2205,16 +2205,16 @@ public sealed class GatewayAdminEndpointTests
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cron" });
         var preview = new AutomationSuggestionPreviewBuilder().Build(originalPrompt, candidate, intent, quality);
 
-        Assert.Equal("每日回顾会话中的待办和风险", candidate.Name);
+        Assert.Equal("Daily conversation follow-up review", candidate.Name);
         Assert.False(candidate.Enabled);
         Assert.True(candidate.IsDraft);
-        Assert.Contains("过去 24 小时", candidate.Prompt, StringComparison.Ordinal);
-        Assert.Contains("只输出", candidate.Prompt, StringComparison.Ordinal);
+        Assert.Contains("past 24 hours", candidate.Prompt, StringComparison.Ordinal);
+        Assert.Contains("Output only", candidate.Prompt, StringComparison.Ordinal);
         Assert.Equal(AutomationSuggestionQualityDecisions.ReadyDraft, quality.Decision);
         Assert.Equal(originalPrompt, preview.OriginalPrompt);
         Assert.Equal(candidate.Prompt, preview.RefinedPrompt);
         Assert.Contains("unfinishedItems", preview.ExpectedOutputSections);
-        Assert.Contains(preview.Warnings, static warning => warning.Contains("过去 24 小时", StringComparison.Ordinal));
+        Assert.Contains(preview.Warnings, static warning => warning.Contains("past 24 hours", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2244,9 +2244,9 @@ public sealed class GatewayAdminEndpointTests
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cron" });
 
         Assert.Equal(AutomationSuggestionQualityDecisions.LearningOnly, result.Decision);
-        Assert.Contains(result.BlockingIssues, static issue => issue.Contains("名称和提示词", StringComparison.Ordinal));
-        Assert.Contains(result.BlockingIssues, static issue => issue.Contains("稳定输入范围", StringComparison.Ordinal));
-        Assert.Contains(result.BlockingIssues, static issue => issue.Contains("预期输出", StringComparison.Ordinal));
+        Assert.Contains(result.BlockingIssues, static issue => issue.Contains("Name and prompt", StringComparison.Ordinal));
+        Assert.Contains(result.BlockingIssues, static issue => issue.Contains("stable input range", StringComparison.Ordinal));
+        Assert.Contains(result.BlockingIssues, static issue => issue.Contains("expected output", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2257,10 +2257,10 @@ public sealed class GatewayAdminEndpointTests
             new AutomationDefinition
             {
                 Id = "suggested:refined",
-                Name = "每日回顾会话中的待办和风险",
+                Name = "Daily conversation follow-up review",
                 Enabled = false,
                 Schedule = "@daily",
-                Prompt = "每天回顾过去 24 小时内的会话内容。只输出：1) 未完成事项；2) 用户明确要求记住的偏好；3) 需要跟进的风险；4) 建议的下一步动作。如果没有值得跟进的内容，输出今天没有需要跟进的事项。",
+                Prompt = "Every day, review conversations from the past 24 hours. Output only: 1) unfinished items; 2) preferences the user explicitly asked to remember; 3) risks that need follow-up; 4) recommended next actions. If there is nothing worth following up on, output that there are no follow-up items today.",
                 DeliveryChannelId = "cron",
                 IsDraft = true,
                 Source = "learning"
@@ -2303,9 +2303,9 @@ public sealed class GatewayAdminEndpointTests
         Assert.Equal("actionable_followup_list", intent.ExpectedOutcome);
         Assert.Equal("daily", intent.CadenceHint);
         Assert.Contains("比较当前的会话内容，做一个整体的评估", intent.TriggerEvidence);
-        Assert.Contains(intent.Ambiguities, static ambiguity => ambiguity.Contains("输入范围", StringComparison.Ordinal));
-        Assert.Contains(intent.Ambiguities, static ambiguity => ambiguity.Contains("比较基准", StringComparison.Ordinal));
-        Assert.Contains(intent.Ambiguities, static ambiguity => ambiguity.Contains("输出格式", StringComparison.Ordinal));
+        Assert.Contains(intent.Ambiguities, static ambiguity => ambiguity.Contains("input range", StringComparison.Ordinal));
+        Assert.Contains(intent.Ambiguities, static ambiguity => ambiguity.Contains("comparison baseline", StringComparison.Ordinal));
+        Assert.Contains(intent.Ambiguities, static ambiguity => ambiguity.Contains("output format", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2321,16 +2321,16 @@ public sealed class GatewayAdminEndpointTests
                 Id = "lp_quality_roundtrip",
                 Kind = LearningProposalKind.AutomationSuggestion,
                 Status = LearningProposalStatus.Pending,
-                Title = "每日回顾会话中的待办和风险",
-                Summary = "质量门禁通过的自动化建议。",
+                Title = "Daily conversation follow-up review",
+                Summary = "Automation suggestion passed the quality gate.",
                 AutomationIntent = new AutomationSuggestionIntent
                 {
                     Intent = "daily_conversation_review",
                     TargetObject = "recent_conversations",
                     ExpectedOutcome = "actionable_followup_list",
                     CadenceHint = "daily",
-                    TriggerEvidence = ["用户多次要求回顾会话"],
-                    Ambiguities = ["原始提示中的当前会话没有稳定范围"]
+                    TriggerEvidence = ["User repeatedly requested a conversation review."],
+                    Ambiguities = ["The original prompt's current conversation scope is unstable."]
                 },
                 AutomationQuality = new AutomationSuggestionQualityResult
                 {
@@ -2342,19 +2342,19 @@ public sealed class GatewayAdminEndpointTests
                         {
                             Name = "input_scope",
                             Score = 90,
-                            Reason = "提示词限定过去 24 小时。"
+                            Reason = "The prompt is scoped to the past 24 hours."
                         }
                     ],
                     Warnings = ["原始提示已被精炼。"]
                 },
                 AutomationSuggestionPreview = new LearningAutomationSuggestionPreview
                 {
-                    WhySuggested = "用户多次要求会话回顾。",
+                    WhySuggested = "User repeatedly requested a conversation review.",
                     OriginalPrompt = "比较当前的会话内容，做一个整体的评估",
-                    RefinedPrompt = "每天回顾过去 24 小时内的会话内容。",
+                    RefinedPrompt = "Every day, review conversations from the past 24 hours.",
                     QualityScore = 88,
                     QualityDecision = AutomationSuggestionQualityDecisions.ReadyDraft,
-                    Warnings = ["当前会话已替换为过去 24 小时。"],
+                    Warnings = ["The current conversation scope was replaced with the past 24 hours."],
                     ExpectedOutputSections = ["unfinishedItems", "risks", "nextActions"]
                 },
                 FeedbackEvents =
@@ -2365,7 +2365,7 @@ public sealed class GatewayAdminEndpointTests
                         ChangedFields = [],
                         BeforeQualityScore = 88,
                         AfterQualityScore = 88,
-                        Summary = "用户直接接受提案。",
+                        Summary = "User accepted the proposal without edits.",
                         CreatedAtUtc = DateTimeOffset.Parse("2026-05-23T00:00:00Z")
                     }
                 ]
@@ -2378,7 +2378,7 @@ public sealed class GatewayAdminEndpointTests
             Assert.Equal("daily_conversation_review", loaded.AutomationIntent!.Intent);
             Assert.Equal(88, loaded.AutomationQuality!.Score);
             Assert.Equal(AutomationSuggestionQualityDecisions.ReadyDraft, loaded.AutomationQuality.Decision);
-            Assert.Equal("每天回顾过去 24 小时内的会话内容。", loaded.AutomationSuggestionPreview!.RefinedPrompt);
+            Assert.Equal("Every day, review conversations from the past 24 hours.", loaded.AutomationSuggestionPreview!.RefinedPrompt);
             Assert.Single(loaded.FeedbackEvents);
             Assert.Equal(LearningProposalFeedbackActions.AcceptedWithoutEdits, loaded.FeedbackEvents[0].Action);
         }
@@ -2402,7 +2402,7 @@ public sealed class GatewayAdminEndpointTests
                 Id = "lp_edit_feedback",
                 Kind = LearningProposalKind.AutomationSuggestion,
                 Status = LearningProposalStatus.Approved,
-                Title = "每日回顾会话中的待办和风险",
+                Title = "Daily conversation follow-up review",
                 Summary = "Feedback test.",
                 AutomationQuality = new AutomationSuggestionQualityResult
                 {
@@ -2414,10 +2414,10 @@ public sealed class GatewayAdminEndpointTests
             await store.SaveAutomationAsync(new AutomationDefinition
             {
                 Id = "suggested:editfeed",
-                Name = "每日回顾会话中的待办和风险",
+                Name = "Daily conversation follow-up review",
                 Enabled = false,
                 Schedule = "@daily",
-                Prompt = "每天回顾过去 24 小时内的会话内容。只输出：1) 未完成事项。",
+                Prompt = "Every day, review conversations from the past 24 hours. Output only: 1) unfinished items.",
                 DeliveryChannelId = "cron",
                 IsDraft = true,
                 Source = "learning",
@@ -2433,10 +2433,10 @@ public sealed class GatewayAdminEndpointTests
             await service.SaveAsync(new AutomationDefinition
             {
                 Id = "suggested:editfeed",
-                Name = "每日回顾会话中的待办和风险",
+                Name = "Daily conversation follow-up review",
                 Enabled = false,
                 Schedule = "@daily",
-                Prompt = "每天回顾过去 24 小时内的会话内容。只输出：1) 未完成事项；2) 风险。",
+                Prompt = "Every day, review conversations from the past 24 hours. Output only: 1) unfinished items; 2) risks.",
                 DeliveryChannelId = "cron",
                 IsDraft = true,
                 Source = "learning",
@@ -2477,15 +2477,15 @@ public sealed class GatewayAdminEndpointTests
                 Id = "lp_feedback_accept",
                 Kind = LearningProposalKind.AutomationSuggestion,
                 Status = LearningProposalStatus.Pending,
-                Title = "每日回顾会话中的待办和风险",
+                Title = "Daily conversation follow-up review",
                 Summary = "Feedback test.",
                 AutomationDraft = new AutomationDefinition
                 {
                     Id = "suggested:feedback",
-                    Name = "每日回顾会话中的待办和风险",
+                    Name = "Daily conversation follow-up review",
                     Enabled = false,
                     Schedule = "@daily",
-                    Prompt = "每天回顾过去 24 小时内的会话内容。只输出：1) 未完成事项。",
+                    Prompt = "Every day, review conversations from the past 24 hours. Output only: 1) unfinished items.",
                     DeliveryChannelId = "cron",
                     IsDraft = true,
                     Source = "learning"
@@ -2501,7 +2501,7 @@ public sealed class GatewayAdminEndpointTests
                 Id = "lp_feedback_reject",
                 Kind = LearningProposalKind.AutomationSuggestion,
                 Status = LearningProposalStatus.Pending,
-                Title = "低质量自动化建议",
+                Title = "Low-quality automation suggestion",
                 Summary = "Feedback test.",
                 AutomationQuality = new AutomationSuggestionQualityResult
                 {

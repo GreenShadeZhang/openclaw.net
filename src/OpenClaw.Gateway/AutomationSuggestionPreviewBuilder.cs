@@ -19,8 +19,8 @@ internal sealed class AutomationSuggestionPreviewBuilder
     private static string BuildWhySuggested(AutomationSuggestionIntent intent)
     {
         if (intent.TriggerEvidence.Count > 0)
-            return "检测到用户多次提出相似请求。";
-        return "检测到可复用的重复请求意图。";
+            return "Similar requests were observed multiple times.";
+        return "A reusable repeated request intent was detected.";
     }
 
     private static IEnumerable<string> BuildWarnings(string originalPrompt, string refinedPrompt, AutomationSuggestionQualityResult quality)
@@ -28,10 +28,11 @@ internal sealed class AutomationSuggestionPreviewBuilder
         foreach (var warning in quality.Warnings)
             yield return warning;
 
-        if (originalPrompt.Contains("当前", StringComparison.OrdinalIgnoreCase) &&
-            refinedPrompt.Contains("过去 24 小时", StringComparison.OrdinalIgnoreCase))
+        if ((originalPrompt.Contains("当前", StringComparison.OrdinalIgnoreCase) ||
+                originalPrompt.Contains("current", StringComparison.OrdinalIgnoreCase)) &&
+            refinedPrompt.Contains("past 24 hours", StringComparison.OrdinalIgnoreCase))
         {
-            yield return "原始提示中的“当前”已替换为“过去 24 小时”，这样定时任务才有稳定输入范围。";
+            yield return "The original prompt's current scope was replaced with the past 24 hours so the scheduled task has a stable input range.";
         }
     }
 

@@ -11,10 +11,10 @@ internal sealed class AutomationSuggestionRefiner
             return new AutomationDefinition
             {
                 Id = $"suggested:{Guid.NewGuid():N}"[..20],
-                Name = "每日回顾会话中的待办和风险",
+                Name = "Daily conversation follow-up review",
                 Enabled = false,
                 Schedule = "@daily",
-                Prompt = "每天回顾过去 24 小时内的会话内容。只输出：1) 未完成事项；2) 用户明确要求记住的偏好；3) 需要跟进的风险；4) 建议的下一步动作。不要泛泛总结，不要评价用户，不要重复已经完成的事项。如果没有值得跟进的内容，输出“今天没有需要跟进的事项”。",
+                Prompt = "Every day, review conversations from the past 24 hours. Output only: 1) unfinished items; 2) preferences the user explicitly asked to remember; 3) risks that need follow-up; 4) recommended next actions. Do not provide a generic summary, do not evaluate the user, and do not repeat completed items. If there is nothing worth following up on, output that there are no follow-up items today.",
                 DeliveryChannelId = "cron",
                 Tags = ["suggested", "learning", "conversation-review"],
                 IsDraft = true,

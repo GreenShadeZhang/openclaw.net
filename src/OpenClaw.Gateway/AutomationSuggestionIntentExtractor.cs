@@ -17,13 +17,13 @@ internal sealed class AutomationSuggestionIntentExtractor
         var ambiguities = new List<string>();
 
         if (ContainsAny(lowerPrompt, CurrentTerms) && !ContainsAny(lowerPrompt, RangeTerms))
-            ambiguities.Add("定时自动化中的输入范围不稳定。");
+            ambiguities.Add("The scheduled automation input range is unstable.");
 
         if (ContainsAny(lowerPrompt, ["比较", "compare"]) && !ContainsAny(lowerPrompt, ["与", "相比", "against", "versus", "baseline"]))
-            ambiguities.Add("比较基准没有说明。");
+            ambiguities.Add("The comparison baseline is not specified.");
 
         if (ContainsAny(lowerPrompt, ReviewTerms) && !ContainsAny(lowerPrompt, OutputTerms))
-            ambiguities.Add("输出格式没有说明。");
+            ambiguities.Add("The output format is not specified.");
 
         var isConversationReview = ContainsAny(lowerPrompt, ConversationTerms) && ContainsAny(lowerPrompt, ReviewTerms);
         return new AutomationSuggestionIntent
