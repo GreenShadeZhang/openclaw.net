@@ -129,6 +129,7 @@ internal sealed class LearningService
             return proposal;
 
         UserProfile? appliedProfileBefore = proposal.AppliedProfileBefore;
+        Dictionary<string, string>? metadata = null;
 
         switch (proposal.Kind)
         {
@@ -183,6 +184,12 @@ internal sealed class LearningService
                 }
                 catch (Exception ex)
                 {
+                    metadata = new Dictionary<string, string>(proposal.Metadata, StringComparer.Ordinal)
+                    {
+                        ["reloadFailed"] = "true",
+                        ["reloadError"] = ex.Message,
+                        ["reloadException"] = ex.ToString()
+                    };
                     _logger.LogWarning(ex, "Approved learning skill proposal '{ProposalId}' was saved, but live skill reload failed.", proposal.Id);
                 }
                 break;
@@ -208,6 +215,7 @@ internal sealed class LearningService
                     SkillName = proposal.SkillName ?? proposal.Title
                 }
                 : proposal.ManagedSkillMetadata,
+            metadata: metadata,
             statusUpdatedAtUtc: approvedAtUtc,
             reviewedAtUtc: approvedAtUtc,
             reviewNotes: "approved",
@@ -1141,6 +1149,7 @@ Use it when repeated requests resemble the sessions that produced this draft.
         string? appliedAutomationId = null,
         string? managedSkillPath = null,
         ManagedLearningSkillMetadata? managedSkillMetadata = null,
+        Dictionary<string, string>? metadata = null,
         IReadOnlyList<string>? sourceSessionIds = null,
         IReadOnlyList<string>? sourceTurnIds = null,
         float? confidence = null,
@@ -1172,6 +1181,7 @@ Use it when repeated requests resemble the sessions that produced this draft.
             AppliedAutomationId = appliedAutomationId ?? proposal.AppliedAutomationId,
             ManagedSkillPath = managedSkillPath ?? proposal.ManagedSkillPath,
             ManagedSkillMetadata = managedSkillMetadata ?? proposal.ManagedSkillMetadata,
+            Metadata = metadata ?? proposal.Metadata,
             SourceSessionIds = sourceSessionIds ?? proposal.SourceSessionIds,
             SourceTurnIds = sourceTurnIds ?? proposal.SourceTurnIds,
             ToolNames = proposal.ToolNames,

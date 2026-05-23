@@ -4,6 +4,7 @@
     "cancel": "Cancel",
     "delete": "Delete",
     "create": "Create",
+    "copy": "Copy",
     "edit": "Edit",
     "close": "Close",
     "confirm": "Confirm",
@@ -97,7 +98,10 @@
     "firstRunWizard": "First Run Wizard",
     "accountId": "Account ID",
     "displayName": "Display Name",
-    "createdAt": "Created At"
+    "createdAt": "Created At",
+    "tokenShownOncePrefix": "This token is shown",
+    "tokenShownOnceEmphasis": "once",
+    "tokenShownOnceSuffix": ". Copy and store it securely now."
   },
   "observability": {
     "title": "Observability",

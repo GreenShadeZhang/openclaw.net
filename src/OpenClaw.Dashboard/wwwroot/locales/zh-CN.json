@@ -4,6 +4,7 @@
     "cancel": "取消",
     "delete": "删除",
     "create": "创建",
+    "copy": "复制",
     "edit": "编辑",
     "close": "关闭",
     "confirm": "确认",
@@ -97,7 +98,10 @@
     "firstRunWizard": "首次运行向导",
     "accountId": "账户 ID",
     "displayName": "显示名称",
-    "createdAt": "创建时间"
+    "createdAt": "创建时间",
+    "tokenShownOncePrefix": "此令牌仅显示",
+    "tokenShownOnceEmphasis": "一次",
+    "tokenShownOnceSuffix": "。请立即复制并安全保存。"
   },
   "observability": {
     "title": "可观测性",

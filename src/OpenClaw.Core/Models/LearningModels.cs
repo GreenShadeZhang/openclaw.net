@@ -78,6 +78,7 @@ public sealed class LearningProposal
     public string? AppliedAutomationId { get; init; }
     public string? ManagedSkillPath { get; init; }
     public ManagedLearningSkillMetadata? ManagedSkillMetadata { get; init; }
+    public Dictionary<string, string> Metadata { get; init; } = new(StringComparer.Ordinal);
     public IReadOnlyList<string> SourceSessionIds { get; init; } = [];
     public IReadOnlyList<string> SourceTurnIds { get; init; } = [];
     public IReadOnlyList<string> ToolNames { get; init; } = [];

@@ -24,7 +24,7 @@
         @if (Auth.IsAuthenticated)
         {
             <MudChip T="string" Color="Color.Success" Size="Size.Small" Class="ml-2">
-                @Auth.CurrentAuth?.Username (@Auth.CurrentAuth?.Role)
+                @(Auth.CurrentAuth?.Username ?? Auth.CurrentAuth?.DisplayName ?? L["auth.notAuthenticated"]) (@Auth.CurrentAuth?.Role)
             </MudChip>
             <MudIconButton Icon="@Icons.Material.Filled.Logout"
                            Color="Color.Inherit"

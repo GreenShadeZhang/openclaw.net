@@ -12,7 +12,7 @@
                   Variant="Variant.Outlined"
                   Icon="@Icons.Material.Filled.Warning"
                   Class="mb-3">
-            This token is shown <strong>once</strong>. Copy and store it securely now.
+            @L["governance.tokenShownOncePrefix"] <strong>@L["governance.tokenShownOnceEmphasis"]</strong>@L["governance.tokenShownOnceSuffix"]
         </MudAlert>
 
         @if (!string.IsNullOrEmpty(AccountId))
@@ -35,7 +35,7 @@
                    Variant="Variant.Filled"
                    StartIcon="@Icons.Material.Filled.ContentCopy"
                    OnClick="Copy">
-            Copy
+            @L["common.copy"]
         </MudButton>
     </DialogActions>
 </MudDialog>

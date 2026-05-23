@@ -1567,7 +1567,7 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
-    public async Task LearningProposalApprove_SkillDraft_ReloadFailureStillApprovesProposal()
+    public async Task LearningProposalApprove_SkillDraft_ReloadFailureApprovesAndReportsFailure()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
         harness.Runtime.AgentRuntime.ReloadSkillsAsync(Arg.Any<CancellationToken>())
@@ -1614,7 +1614,21 @@ public sealed class GatewayAdminEndpointTests
             using var approvePayload = await ReadJsonAsync(approveResponse);
             Assert.Equal("approved", approvePayload.RootElement.GetProperty("status").GetString());
             Assert.Equal(skillPath, approvePayload.RootElement.GetProperty("managedSkillPath").GetString());
+            var metadata = approvePayload.RootElement.GetProperty("metadata");
+            Assert.Equal("true", metadata.GetProperty("reloadFailed").GetString());
+            Assert.Equal("Skill reload failed.", metadata.GetProperty("reloadError").GetString());
+            Assert.Contains("InvalidOperationException", metadata.GetProperty("reloadException").GetString());
             Assert.True(File.Exists(Path.Join(skillPath, "SKILL.md")));
+
+            using var detailRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/learning/proposals/lp_reload_failure_skill");
+            detailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+            using var detailResponse = await harness.Client.SendAsync(detailRequest);
+            Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+            using var detailPayload = await ReadJsonAsync(detailResponse);
+            var persistedMetadata = detailPayload.RootElement.GetProperty("proposal").GetProperty("metadata");
+            Assert.Equal("true", persistedMetadata.GetProperty("reloadFailed").GetString());
+            Assert.Equal("Skill reload failed.", persistedMetadata.GetProperty("reloadError").GetString());
+            Assert.Contains("InvalidOperationException", persistedMetadata.GetProperty("reloadException").GetString());
         }
         finally
         {

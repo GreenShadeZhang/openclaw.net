@@ -58,6 +58,41 @@ public sealed class DashboardStaticAssetTests
     }
 
     [Fact]
+    public void DashboardNavigation_RendersOnlyForAuthenticatedUsers()
+    {
+        var navMenu = File.ReadAllText(Path.Combine(GetDashboardProjectDirectory(), "Layout", "NavMenu.razor"));
+        var authenticatedBlock = ExtractIfBlock(navMenu, "@if (Auth.IsAuthenticated)");
+
+        Assert.Contains("Href=\"\"", authenticatedBlock);
+        Assert.Contains("Href=\"observability\"", authenticatedBlock);
+        Assert.Contains("Href=\"migration\"", authenticatedBlock);
+        Assert.Contains("Href=\"integration\"", authenticatedBlock);
+        Assert.Contains("Href=\"sessions\"", authenticatedBlock);
+        Assert.Contains("Auth.HasRole(\"admin\")", authenticatedBlock);
+        Assert.Contains("Auth.HasRole(\"operator\")", authenticatedBlock);
+    }
+
+    [Fact]
+    public void LoginDialog_MasksTokenInputs()
+    {
+        var loginDialog = File.ReadAllText(Path.Combine(GetDashboardProjectDirectory(), "Components", "LoginDialog.razor"));
+
+        Assert.Contains("InputType=\"InputType.Password\"", ExtractMudTextField(loginDialog, "@bind-Value=\"_token\""));
+        Assert.Contains("InputType=\"InputType.Password\"", ExtractMudTextField(loginDialog, "@bind-Value=\"_bootstrapToken\""));
+    }
+
+    [Fact]
+    public void AuthState_AllowsGatewayNullUsername()
+    {
+        var authState = File.ReadAllText(Path.Combine(GetDashboardProjectDirectory(), "Models", "AuthState.cs"));
+        var mainLayout = File.ReadAllText(Path.Combine(GetDashboardProjectDirectory(), "Layout", "MainLayout.razor"));
+
+        Assert.Contains("string? Username", authState);
+        Assert.DoesNotContain("string Username", authState);
+        Assert.Contains("Auth.CurrentAuth?.Username ??", mainLayout);
+    }
+
+    [Fact]
     public void DashboardApiService_NormalizesRelativeApiUrlsToGatewayRoot()
     {
         var apiService = File.ReadAllText(Path.Combine(GetDashboardProjectDirectory(), "Services", "ApiService.cs"));
@@ -261,6 +296,19 @@ public sealed class DashboardStaticAssetTests
     }
 
     [Fact]
+    public void TokenRevealDialog_LocalizesUserFacingText()
+    {
+        var tokenRevealDialog = File.ReadAllText(Path.Combine(GetDashboardProjectDirectory(), "Components", "TokenRevealDialog.razor"));
+
+        Assert.DoesNotContain("This token is shown", tokenRevealDialog);
+        Assert.DoesNotContain(">Copy<", tokenRevealDialog.ReplaceLineEndings(string.Empty));
+        Assert.Contains("L[\"governance.tokenShownOncePrefix\"]", tokenRevealDialog);
+        Assert.Contains("L[\"governance.tokenShownOnceEmphasis\"]", tokenRevealDialog);
+        Assert.Contains("L[\"governance.tokenShownOnceSuffix\"]", tokenRevealDialog);
+        Assert.Contains("L[\"common.copy\"]", tokenRevealDialog);
+    }
+
+    [Fact]
     public void DashboardLocalizationFiles_ContainAllReferencedKeys()
     {
         var dashboardDirectory = GetDashboardProjectDirectory();
@@ -290,22 +338,27 @@ public sealed class DashboardStaticAssetTests
     [Fact]
     public void DashboardBuildOutput_IncludesCanonicalBlazorRuntimeAssets()
     {
-        var candidatePaths = new[]
-        {
-            Path.GetFullPath(Path.Combine(
-                AppContext.BaseDirectory,
-                "..", "..", "..", "..",
-                "OpenClaw.Gateway", "bin", "Release", "net10.0", "wwwroot", "dashboard", "_framework")),
-            Path.GetFullPath(Path.Combine(
-                AppContext.BaseDirectory,
-                "..", "..", "..", "..",
-                "OpenClaw.Gateway", "bin", "Debug", "net10.0", "wwwroot", "dashboard", "_framework"))
-        };
+        var gatewayBinPath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..",
+            "OpenClaw.Gateway", "bin"));
+        var candidatePaths = Directory.Exists(gatewayBinPath)
+            ? Directory.EnumerateDirectories(gatewayBinPath)
+                .SelectMany(configurationDirectory => Directory.EnumerateDirectories(configurationDirectory, "net*")
+                    .Select(tfmDirectory => new
+                    {
+                        FrameworkPath = Path.Combine(tfmDirectory, "wwwroot", "dashboard", "_framework"),
+                        LastWriteTimeUtc = Directory.GetLastWriteTimeUtc(tfmDirectory)
+                    }))
+                .OrderByDescending(candidate => candidate.LastWriteTimeUtc)
+                .Select(candidate => candidate.FrameworkPath)
+                .ToArray()
+            : [];
         var gatewayFrameworkPath = candidatePaths.FirstOrDefault(Directory.Exists);
 
         Assert.True(
             gatewayFrameworkPath is not null,
-            $"Could not find dashboard framework output. Checked: {string.Join(", ", candidatePaths)}");
+            $"Could not find dashboard framework output under {gatewayBinPath}. Checked: {string.Join(", ", candidatePaths)}");
         Assert.True(
             File.Exists(Path.Combine(gatewayFrameworkPath, "blazor.webassembly.js")),
             $"Missing blazor.webassembly.js in {gatewayFrameworkPath}");
@@ -324,11 +377,48 @@ public sealed class DashboardStaticAssetTests
 
         await using var app = await CreateAppAsync(dashboardPath);
 
-        var response = await app.GetTestClient().GetAsync("/dashboard/css/app.css");
+        var staticAssetResponse = await app.GetTestClient().GetAsync("/dashboard/css/app.css");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("text/css", response.Content.Headers.ContentType?.MediaType);
-        Assert.Equal(".dashboard { color: rebeccapurple; }", await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, staticAssetResponse.StatusCode);
+        Assert.Equal("text/css", staticAssetResponse.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(".dashboard { color: rebeccapurple; }", await staticAssetResponse.Content.ReadAsStringAsync());
+
+        var fallbackResponse = await app.GetTestClient().GetAsync("/dashboard/unknown-route");
+
+        Assert.Equal(HttpStatusCode.OK, fallbackResponse.StatusCode);
+        Assert.Contains("<!doctype html>", await fallbackResponse.Content.ReadAsStringAsync());
+    }
+
+    private static string ExtractMudTextField(string source, string marker)
+    {
+        var markerIndex = source.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(markerIndex >= 0, $"Could not find MudTextField marker {marker}.");
+        var startIndex = source.LastIndexOf("<MudTextField", markerIndex, StringComparison.Ordinal);
+        var endIndex = source.IndexOf("/>", markerIndex, StringComparison.Ordinal);
+        Assert.True(startIndex >= 0 && endIndex >= markerIndex, $"Could not find MudTextField containing {marker}.");
+        return source[startIndex..(endIndex + 2)];
+    }
+
+    private static string ExtractIfBlock(string source, string marker)
+    {
+        var markerIndex = source.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(markerIndex >= 0, $"Could not find block marker {marker}.");
+        var startIndex = source.IndexOf('{', markerIndex);
+        Assert.True(startIndex >= 0, $"Could not find block start for {marker}.");
+
+        var depth = 0;
+        for (var index = startIndex; index < source.Length; index++)
+        {
+            if (source[index] == '{')
+                depth++;
+            else if (source[index] == '}')
+                depth--;
+
+            if (depth == 0)
+                return source[startIndex..(index + 1)];
+        }
+
+        throw new InvalidOperationException($"Could not find block end for {marker}.");
     }
 
     private static XDocument LoadDashboardProject()
