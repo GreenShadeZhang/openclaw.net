@@ -923,8 +923,13 @@
         if (root.TryGetProperty("metadata", out var metaEl)
             && metaEl.ValueKind == System.Text.Json.JsonValueKind.Object)
         {
-            // Keep the snapshot as a JsonElement so FormatMetadata / ExtractBranches can read it.
-            metadata["snapshot"] = metaEl.Clone();
+            // Flatten the envelope metadata object so top-level keys like "branches"
+            // are directly accessible to FormatMetadata / ExtractBranches.
+            // Later keys overwrite earlier entries to honor the envelope payload.
+            foreach (var property in metaEl.EnumerateObject())
+            {
+                metadata[property.Name] = property.Value.Clone();
+            }
         }
 
         return new SessionDetail(id, channelId, senderId, lastActive,
