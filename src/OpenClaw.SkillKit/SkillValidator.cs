@@ -8,7 +8,7 @@ public sealed class SkillValidator
     {
         var root = SkillPackageReader.ResolveSkillPath(skillRef, skillsRoot);
         var issues = new List<SkillValidationIssue>();
-        var manifestPath = Path.Combine(root, "skill.yaml");
+        var manifestPath = SkillPackageReader.ResolvePackageFilePath(root, "skill.yaml");
 
         if (!File.Exists(manifestPath))
         {
@@ -30,7 +30,7 @@ public sealed class SkillValidator
 
         foreach (var file in SkillTemplateRenderer.RequiredFiles.Where(static file => file != "skill.yaml"))
         {
-            issues.Add(File.Exists(Path.Combine(root, file))
+            issues.Add(File.Exists(SkillPackageReader.ResolvePackageFilePath(root, file))
                 ? Pass("Files", $"{file} exists.", file)
                 : Error("Files", $"{file} is missing.", file));
         }

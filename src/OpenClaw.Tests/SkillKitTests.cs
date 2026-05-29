@@ -25,18 +25,18 @@ public sealed class SkillKitTests
         try
         {
             var service = SkillPackageService.CreateDefault();
-            var skillsRoot = Path.Combine(root, "skills");
+            var skillsRoot = Path.Join(root, "skills");
 
             var package = await service.CreateNewAsync("Community Research Insight Extractor", "research", "research", skillsRoot, force: false);
 
             foreach (var file in SkillTemplateRenderer.RequiredFiles)
-                Assert.True(File.Exists(Path.Combine(package.RootPath, file)), file);
+                Assert.True(File.Exists(Path.Join(package.RootPath, file)), file);
 
             await Assert.ThrowsAsync<IOException>(() =>
                 service.CreateNewAsync("Community Research Insight Extractor", "research", "research", skillsRoot, force: false));
 
             var forced = await service.CreateNewAsync("Community Research Insight Extractor", "research", "research", skillsRoot, force: true);
-            Assert.True(File.Exists(Path.Combine(forced.RootPath, "skill.yaml")));
+            Assert.True(File.Exists(Path.Join(forced.RootPath, "skill.yaml")));
         }
         finally
         {
@@ -51,10 +51,10 @@ public sealed class SkillKitTests
         try
         {
             var service = SkillPackageService.CreateDefault();
-            var skillsRoot = Path.Combine(root, "skills");
+            var skillsRoot = Path.Join(root, "skills");
             var package = await service.CreateNewAsync("Donor Proposal Builder", "proposal", "proposal", skillsRoot, force: false);
-            var examplesPath = Path.Combine(package.RootPath, "examples.md");
-            var guardrailsPath = Path.Combine(package.RootPath, "guardrails.md");
+            var examplesPath = Path.Join(package.RootPath, "examples.md");
+            var guardrailsPath = Path.Join(package.RootPath, "guardrails.md");
             File.Delete(examplesPath);
             await File.WriteAllTextAsync(guardrailsPath, "custom guardrails");
 
@@ -76,7 +76,7 @@ public sealed class SkillKitTests
     public async Task ManifestSerialization_RoundTripsKeyFields()
     {
         var manifest = new SkillTemplateRenderer().CreateManifest("Donor Proposal Builder", "proposal", "proposal");
-        var path = Path.Combine(CreateTempRoot(), "skill.yaml");
+        var path = Path.Join(CreateTempRoot(), "skill.yaml");
         try
         {
             await SkillManifestSerializer.WriteAsync(path, manifest);
@@ -116,7 +116,7 @@ public sealed class SkillKitTests
                 Steps = [new SkillWorkflowStep { Id = "validate", Name = "Validate", Type = SkillWorkflowStepType.Validation, Description = "Validate output." }]
             }
         };
-        var path = Path.Combine(CreateTempRoot(), "skill.yaml");
+        var path = Path.Join(CreateTempRoot(), "skill.yaml");
         try
         {
             await SkillManifestSerializer.WriteAsync(path, manifest);
@@ -139,13 +139,13 @@ public sealed class SkillKitTests
         try
         {
             var service = SkillPackageService.CreateDefault();
-            var skillsRoot = Path.Combine(root, "skills");
+            var skillsRoot = Path.Join(root, "skills");
             var package = await service.CreateNewAsync("Community Research Insight Extractor", "research", "research", skillsRoot, force: false);
 
             var valid = await service.ValidateAsync(package.Manifest.Id, skillsRoot);
             Assert.True(valid.Passed);
 
-            var missing = await service.ValidateAsync(Path.Combine(root, "missing"), skillsRoot);
+            var missing = await service.ValidateAsync(Path.Join(root, "missing"), skillsRoot);
             Assert.False(missing.Passed);
             Assert.Contains(missing.Issues, static issue => issue.FileName == "skill.yaml" && issue.Severity == SkillValidationSeverity.Error);
         }
@@ -161,8 +161,8 @@ public sealed class SkillKitTests
         var root = CreateTempRoot();
         try
         {
-            var skillsRoot = Path.Combine(root, "skills");
-            var skillRoot = Path.Combine(skillsRoot, "test.bad_skill");
+            var skillsRoot = Path.Join(root, "skills");
+            var skillRoot = Path.Join(skillsRoot, "test.bad_skill");
             Directory.CreateDirectory(skillRoot);
             var manifest = new SkillManifest
             {
@@ -178,9 +178,9 @@ public sealed class SkillKitTests
                 Validation = new SkillValidationPolicy { Checks = [] },
                 Workflow = new SkillWorkflow { Steps = [] }
             };
-            await SkillManifestSerializer.WriteAsync(Path.Combine(skillRoot, "skill.yaml"), manifest);
+            await SkillManifestSerializer.WriteAsync(Path.Join(skillRoot, "skill.yaml"), manifest);
             foreach (var file in SkillTemplateRenderer.RequiredFiles.Where(static file => file != "skill.yaml"))
-                await File.WriteAllTextAsync(Path.Combine(skillRoot, file), "# Test");
+                await File.WriteAllTextAsync(Path.Join(skillRoot, file), "# Test");
 
             var result = await new SkillValidator().ValidateAsync("test.bad_skill", skillsRoot);
 
@@ -202,8 +202,8 @@ public sealed class SkillKitTests
         try
         {
             var service = SkillPackageService.CreateDefault();
-            var skillsRoot = Path.Combine(root, "skills");
-            var packagesRoot = Path.Combine(root, "packages");
+            var skillsRoot = Path.Join(root, "skills");
+            var packagesRoot = Path.Join(root, "packages");
             await service.CreateNewAsync("Donor Proposal Builder", "proposal", "proposal", skillsRoot, force: false);
 
             var zipPath = await service.PackageAsync("donor.proposal_builder", skillsRoot, packagesRoot, force: false);
@@ -225,8 +225,8 @@ public sealed class SkillKitTests
         var root = CreateTempRoot();
         try
         {
-            var skillsRoot = Path.Combine(root, "skills");
-            var inputPath = Path.Combine(root, "transcript.md");
+            var skillsRoot = Path.Join(root, "skills");
+            var inputPath = Path.Join(root, "transcript.md");
             await File.WriteAllTextAsync(inputPath, "Meeting notes");
             await SkillPackageService.CreateDefault().CreateNewAsync("Community Research Insight Extractor", "research", "research", skillsRoot, force: false);
 
@@ -257,7 +257,7 @@ public sealed class SkillKitTests
         var root = CreateTempRoot();
         try
         {
-            var skillsRoot = Path.Combine(root, "skills");
+            var skillsRoot = Path.Join(root, "skills");
             await SkillPackageService.CreateDefault().CreateNewAsync("Community Research Insight Extractor", "research", "research", skillsRoot, force: false);
 
             using var stdout = new StringWriter();
@@ -283,12 +283,12 @@ public sealed class SkillKitTests
         var root = CreateTempRoot();
         try
         {
-            var skillsRoot = Path.Combine(root, "skills");
+            var skillsRoot = Path.Join(root, "skills");
             var package = await SkillPackageService.CreateDefault().CreateNewAsync("Donor Proposal Builder", "proposal", "proposal", skillsRoot, force: false);
 
             await new SkillTraceUpdater().AppendAsync(package, "packaged\n- forged entry");
 
-            var trace = await File.ReadAllTextAsync(Path.Combine(package.RootPath, "trace.md"));
+            var trace = await File.ReadAllTextAsync(Path.Join(package.RootPath, "trace.md"));
             Assert.Contains("packaged - forged entry", trace, StringComparison.Ordinal);
             Assert.DoesNotContain("- forged entry", trace.Replace("packaged - forged entry", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
         }
@@ -304,7 +304,7 @@ public sealed class SkillKitTests
         var root = CreateTempRoot();
         try
         {
-            var skillsRoot = Path.Combine(root, "skills");
+            var skillsRoot = Path.Join(root, "skills");
             await SkillPackageService.CreateDefault().CreateNewAsync("Donor Proposal Builder", "proposal", "proposal", skillsRoot, force: false);
 
             using var stdout = new StringWriter();
@@ -328,7 +328,7 @@ public sealed class SkillKitTests
         var root = CreateTempRoot();
         try
         {
-            var skillsRoot = Path.Combine(root, "skills");
+            var skillsRoot = Path.Join(root, "skills");
             await SkillPackageService.CreateDefault().CreateNewAsync("Community Research Insight Extractor", "research", "research", skillsRoot, force: false);
 
             using var stdout = new StringWriter();
@@ -336,7 +336,7 @@ public sealed class SkillKitTests
             var exitCode = await SkillKitCommands.RunAsync(["critique", "community.research_insight", "--output", skillsRoot], stdout, stderr, root);
 
             Assert.Equal(0, exitCode);
-            var critiquePath = Path.Combine(skillsRoot, "community.research_insight", "critique.md");
+            var critiquePath = Path.Join(skillsRoot, "community.research_insight", "critique.md");
             Assert.True(File.Exists(critiquePath));
             Assert.Contains("deterministic", await File.ReadAllTextAsync(critiquePath), StringComparison.OrdinalIgnoreCase);
         }
@@ -348,7 +348,7 @@ public sealed class SkillKitTests
 
     private static string CreateTempRoot()
     {
-        var root = Path.Combine(Path.GetTempPath(), "openclaw-skillkit-tests", Guid.NewGuid().ToString("n"));
+        var root = Path.Join(Path.GetTempPath(), "openclaw-skillkit-tests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(root);
         return root;
     }

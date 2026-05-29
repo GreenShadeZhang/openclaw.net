@@ -61,7 +61,7 @@ public sealed class SkillPackageService(
     {
         var package = await reader.ReadAsync(skillRef, skillsRoot, cancellationToken);
         var critique = await critiqueProvider.CritiqueAsync(package, cancellationToken);
-        var path = Path.Combine(package.RootPath, "critique.md");
+        var path = SkillPackageReader.ResolvePackageFilePath(package.RootPath, "critique.md");
         await File.WriteAllTextAsync(path, critique.Markdown, Encoding.UTF8, cancellationToken);
         await traceUpdater.AppendAsync(package, "Generated deterministic critique.", cancellationToken);
         return path;
