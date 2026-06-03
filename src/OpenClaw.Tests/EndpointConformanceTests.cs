@@ -47,4 +47,37 @@ public class EndpointConformanceTests
         Assert.True(root.TryGetProperty("uptime", out var uptime));
         Assert.Equal(42, uptime.GetInt64());
     }
+
+    [Fact]
+    public void IntegrationToolPresetsResponse_DeserializesToolCollections_Via_SourceGen()
+    {
+        const string json = """
+            {
+              "items": [
+                {
+                  "presetId": "web",
+                  "description": "Built-in preset 'web'.",
+                  "surface": "web",
+                  "effectiveAutonomyMode": "interactive",
+                  "requireToolApproval": true,
+                  "allowedTools": ["session_search", "profile_read"],
+                  "approvalRequiredTools": ["process", "automation"]
+                }
+              ]
+            }
+            """;
+
+        IntegrationToolPresetsResponse? response = null;
+        var exception = Record.Exception(() =>
+            response = JsonSerializer.Deserialize(json, CoreJsonContext.Default.IntegrationToolPresetsResponse));
+
+        Assert.Null(exception);
+        var preset = Assert.Single(response!.Items);
+        Assert.Contains("session_search", preset.AllowedTools, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("profile_read", preset.AllowedTools, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("process", preset.ApprovalRequiredTools, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("automation", preset.ApprovalRequiredTools, StringComparer.OrdinalIgnoreCase);
+        Assert.True(preset.AllowedTools.Contains("SESSION_SEARCH"));
+        Assert.True(preset.ApprovalRequiredTools.Contains("PROCESS"));
+    }
 }
