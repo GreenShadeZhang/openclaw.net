@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace OpenClaw.Core.Models;
 
 public sealed class ToolsetConfig
@@ -28,8 +31,55 @@ public sealed class ResolvedToolPreset
     public string Surface { get; init; } = "";
     public string EffectiveAutonomyMode { get; init; } = "";
     public bool RequireToolApproval { get; init; }
+
+    [JsonConverter(typeof(ReadOnlyStringSetJsonConverter))]
     public IReadOnlySet<string> AllowedTools { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    [JsonConverter(typeof(ReadOnlyStringSetJsonConverter))]
     public IReadOnlySet<string> ApprovalRequiredTools { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+}
+
+internal sealed class ReadOnlyStringSetJsonConverter : JsonConverter<IReadOnlySet<string>>
+{
+    public override bool HandleNull => true;
+
+    public override IReadOnlySet<string> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (reader.TokenType != JsonTokenType.StartArray)
+            throw new JsonException($"Expected a JSON array for {typeToConvert}.");
+
+        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndArray)
+                return values;
+            if (reader.TokenType == JsonTokenType.Null)
+                continue;
+            if (reader.TokenType != JsonTokenType.String)
+                throw new JsonException("Expected a string value in the tool set.");
+
+            values.Add(reader.GetString()!);
+        }
+
+        throw new JsonException("Unexpected end of JSON while reading the tool set.");
+    }
+
+    public override void Write(Utf8JsonWriter writer, IReadOnlySet<string>? value, JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        writer.WriteStartArray();
+        foreach (var item in value)
+            writer.WriteStringValue(item);
+        writer.WriteEndArray();
+    }
 }
 
 public sealed class ToolActionDescriptor
