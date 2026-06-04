@@ -3,6 +3,7 @@
     <RootNamespace>OpenClaw.Gateway</RootNamespace>
     <OutputType>Exe</OutputType>
     <OpenClawEnableOpenSandbox Condition="'$(OpenClawEnableOpenSandbox)' == ''">false</OpenClawEnableOpenSandbox>
+    <OpenClawSkipDashboardBuild Condition="'$(OpenClawSkipDashboardBuild)' == ''">false</OpenClawSkipDashboardBuild>
     <PublishAot>true</PublishAot>
     <StripSymbols>true</StripSymbols>
     <OptimizationPreference>Size</OptimizationPreference>
@@ -27,6 +28,7 @@
     <ProjectReference Include="..\OpenClaw.Core\OpenClaw.Core.csproj" />
     <ProjectReference Include="..\OpenClaw.Agent\OpenClaw.Agent.csproj" />
     <ProjectReference Include="..\OpenClaw.Channels\OpenClaw.Channels.csproj" />
+    <ProjectReference Include="..\OpenClaw.Protocols.Mqtt\OpenClaw.Protocols.Mqtt.csproj" />
     <ProjectReference Include="..\OpenClaw.Payments.Abstractions\OpenClaw.Payments.Abstractions.csproj" />
     <ProjectReference Include="..\OpenClaw.Payments.Core\OpenClaw.Payments.Core.csproj" />
     <ProjectReference Include="..\OpenClaw.Payments.StripeLink\OpenClaw.Payments.StripeLink.csproj" />
@@ -79,15 +81,19 @@
     </Content>
   </ItemGroup>
 
+  <Target Name="CleanDashboardFiles" AfterTargets="Build">
+    <RemoveDir Directories="$(OutputPath)wwwroot\dashboard" />
+  </Target>
+
   <!-- Publish Dashboard WASM so all assets (_framework/, _content/, css/) are materialized on disk.
-       Runs AfterTargets=Build so the ProjectReference build of Dashboard completes first. -->
-  <Target Name="CopyDashboardFiles" AfterTargets="Build">
+       CI build/test loops can set OpenClawSkipDashboardBuild=true; publish still copies Dashboard assets below. -->
+  <Target Name="CopyDashboardFiles" AfterTargets="CleanDashboardFiles" Condition="'$(OpenClawSkipDashboardBuild)' != 'true'">
     <PropertyGroup>
       <_DashboardProject>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'OpenClaw.Dashboard', 'OpenClaw.Dashboard.csproj'))</_DashboardProject>
       <_DashboardPublishDir>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'OpenClaw.Dashboard', 'bin', 'publish'))</_DashboardPublishDir>
       <_DashboardPublishWwwroot>$(_DashboardPublishDir)\wwwroot</_DashboardPublishWwwroot>
     </PropertyGroup>
-    <RemoveDir Directories="$(_DashboardPublishDir);$(OutputPath)wwwroot\dashboard" />
+    <RemoveDir Directories="$(_DashboardPublishDir)" />
     <Exec Command="dotnet publish &quot;$(_DashboardProject)&quot; -c $(Configuration) -o &quot;$(_DashboardPublishDir)&quot; --nologo -v q" />
     <ItemGroup>
       <_DashboardPublishFiles Include="$(_DashboardPublishWwwroot)\**\*" />
@@ -115,6 +121,10 @@
           DestinationFiles="$(OutputPath)wwwroot\dashboard\_framework\dotnet.js"
           SkipUnchangedFiles="true"
           Condition="'@(_DotNetBootScript)' != ''" />
+  </Target>
+
+  <Target Name="CleanDashboardFilesWhenSkipped" AfterTargets="Build" Condition="'$(OpenClawSkipDashboardBuild)' == 'true'">
+    <RemoveDir Directories="$(OutputPath)wwwroot\dashboard" />
   </Target>
 
   <!-- Copy Dashboard publish output to Gateway publish dir -->
