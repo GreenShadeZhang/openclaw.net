@@ -233,7 +233,10 @@
 							<StackPanel Spacing="10">
 								<TextBlock Text="First Run Setup" Classes="section-title" />
 								<Grid ColumnDefinitions="*,*,*" ColumnSpacing="10">
-									<ComboBox Grid.Column="0" HorizontalAlignment="Stretch" SelectedItem="{Binding SetupProvider}">
+									<ComboBox Grid.Column="0" 
+											  HorizontalAlignment="Stretch" 
+											  SelectedItem="{Binding SetupProvider}"
+											  IsEditable="True">
 										<sys:String>openai</sys:String>
 										<sys:String>anthropic</sys:String>
 										<sys:String>gemini</sys:String>
@@ -264,7 +267,10 @@
 										<sys:String>gemma2</sys:String>
 										<sys:String>mistral</sys:String>
 									</ComboBox>
-									<ComboBox Grid.Column="2" HorizontalAlignment="Stretch" SelectedItem="{Binding SetupModelPreset}">
+									<ComboBox Grid.Column="2" 
+											  HorizontalAlignment="Stretch" 
+											  SelectedItem="{Binding SetupModelPreset}"
+											  IsEditable="True">
 										<!-- Presets for Ollama (Local) -->
 										<sys:String>ollama-general</sys:String>
 										<sys:String>ollama-llama3-8b</sys:String>
