@@ -26,6 +26,16 @@ At the start of each turn, OpenClaw can resolve a `TurnRoutingDecision` that con
 - an optional prompt suffix used as route instructions
 - a machine-readable reason string
 
+The decision contract also carries additive routing directives used by profile selection and runtime shaping:
+
+- `DirectModelFallbackProfileId`
+- `ReasoningLevel`
+- `ResponsePolicy`
+- `ImageCapableModelProfileId`
+- `CacheContinuitySafeguardsEnabled`
+- `CacheContinuityMaxConversationTurns`
+- `CacheContinuityResetOnProfileSwitch`
+
 That decision is applied only for the current turn. After the turn completes, the previous session route state is restored.
 
 One field is intentionally sticky: `Session.RouteModelTier` is retained across turns so `EnableStickyTier` policy behavior can be applied consistently.
@@ -189,6 +199,22 @@ Both runtimes now share the same high-level semantics:
 
 For the MAF adapter there is one extra nuance: if a routing decision returns an empty `AllowedTools` array, the runtime does not overwrite an already-populated manual `Session.RouteAllowedTools` allowlist. This preserves existing MAF route-filter behavior when no explicit per-turn allowlist is supplied by the router.
 
+## CLI Surface
+
+OpenClaw remains config-first for dynamic routing (`OpenClaw:DynamicTurnRouting`).
+
+For operator workflows, the CLI now exposes a routing command group:
+
+- `openclaw routing onboard`
+- `openclaw routing configure router`
+- `openclaw routing configure providers`
+- `openclaw routing providers`
+- `openclaw routing status`
+- `openclaw routing diagnostics on`
+- `openclaw routing diagnostics off`
+
+These commands are a management facade over the same config-driven routing surface; they do not introduce a second routing engine.
+
 ## Operator Guidance
 
 Use this feature when you want:
@@ -214,4 +240,3 @@ For now, think of it as a stable routing contract plus optional ONNX composition
 - [ARCHITECTURE_BOUNDARIES.md](ARCHITECTURE_BOUNDARIES.md): why ONNX routing stays outside `OpenClaw.Core`
 - [MODEL_PROFILES.md](MODEL_PROFILES.md): how routed profile ids flow through normal model selection
 - [integrations/microsoft-agent-framework.md](integrations/microsoft-agent-framework.md): MAF runtime path and adapter context
-- [OpenSquilla 动态路由实现研究.md](OpenSquilla%20动态路由实现研究.md): original research note that motivated the implementation

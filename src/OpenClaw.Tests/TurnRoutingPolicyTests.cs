@@ -100,6 +100,43 @@ public sealed class TurnRoutingPolicyTests
     }
 
     [Fact]
+    public async Task ResolveAsync_PopulatesAdditiveRoutingDirectivesFromTierTarget()
+    {
+        var policy = BuildRoutingConfig();
+        policy.Policy.Tiers.T2 = new DynamicTurnRoutingTierTarget
+        {
+            ModelProfileId = "frontier-tools",
+            DirectModelFallbackProfileId = "frontier-tools-fallback",
+            ReasoningLevel = "high",
+            ResponsePolicy = "detailed",
+            ImageCapableModelProfileId = "frontier-vision",
+            CacheContinuitySafeguards = new CacheContinuitySafeguardsConfig
+            {
+                Enabled = true,
+                MaxConversationTurns = 96,
+                ResetOnProfileSwitch = false
+            }
+        };
+
+        var sut = new OnnxTurnRoutingPolicy(
+            policy,
+            new StubEmbeddingGenerator([0.25f, 0.5f, 0.75f]),
+            new StubTierClassifier(2),
+            NullLogger<OnnxTurnRoutingPolicy>.Instance);
+
+        var decision = await sut.ResolveAsync(BuildRequest("plan production rollout"), CancellationToken.None);
+
+        Assert.Equal("T2", decision.Tier);
+        Assert.Equal("frontier-tools-fallback", decision.DirectModelFallbackProfileId);
+        Assert.Equal("high", decision.ReasoningLevel);
+        Assert.Equal("detailed", decision.ResponsePolicy);
+        Assert.Equal("frontier-vision", decision.ImageCapableModelProfileId);
+        Assert.True(decision.CacheContinuitySafeguardsEnabled);
+        Assert.Equal(96, decision.CacheContinuityMaxConversationTurns);
+        Assert.False(decision.CacheContinuityResetOnProfileSwitch);
+    }
+
+    [Fact]
     public async Task ResolveAsync_WithResolvedConfig_UsesResolvedTierTargets()
     {
         var policy = new OnnxTurnRoutingPolicy(
@@ -266,6 +303,45 @@ public sealed class TurnRoutingPolicyTests
 
         Assert.Equal("T2", decision.Tier);
         Assert.Contains("margin_upgrade", decision.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenR1RescueEnabledAndMarginUpgradeDisabled_StillPromotesT0ToT1()
+    {
+        var policy = new OnnxTurnRoutingPolicy(
+            BuildRoutingConfig(new DynamicTurnRoutingPolicyConfig
+            {
+                EnableMarginUpgrade = false,
+                EnableR1Rescue = true
+            }),
+            new StubEmbeddingGenerator([0.1f, 0.2f, 0.3f]),
+            new StubTierClassifier(0, [0.30f, 0.29f, 0.25f, 0.16f]),
+            NullLogger<OnnxTurnRoutingPolicy>.Instance);
+
+        var decision = await policy.ResolveAsync(BuildRequest("simple prompt"), CancellationToken.None);
+
+        Assert.Equal("T1", decision.Tier);
+        Assert.Contains("r1_rescue", decision.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("margin_upgrade", decision.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenR1RescueDisabled_DoesNotPromoteT0ToT1()
+    {
+        var policy = new OnnxTurnRoutingPolicy(
+            BuildRoutingConfig(new DynamicTurnRoutingPolicyConfig
+            {
+                EnableMarginUpgrade = false,
+                EnableR1Rescue = false
+            }),
+            new StubEmbeddingGenerator([0.1f, 0.2f, 0.3f]),
+            new StubTierClassifier(0, [0.30f, 0.29f, 0.25f, 0.16f]),
+            NullLogger<OnnxTurnRoutingPolicy>.Instance);
+
+        var decision = await policy.ResolveAsync(BuildRequest("simple prompt"), CancellationToken.None);
+
+        Assert.Equal("T0", decision.Tier);
+        Assert.DoesNotContain("r1_rescue", decision.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     private static TurnRoutingRequest BuildRequest(string userMessage, IReadOnlyList<ChatMessage>? messages = null)

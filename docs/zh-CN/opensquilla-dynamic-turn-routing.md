@@ -221,4 +221,3 @@ MAF 还有一个额外语义：如果路由决策（routing decision）返回的
 - [ARCHITECTURE_BOUNDARIES.md](../ARCHITECTURE_BOUNDARIES.md)：为什么 ONNX 路由（routing）不进入 `OpenClaw.Core`
 - [MODEL_PROFILES.md](../MODEL_PROFILES.md)：被路由的模型档位（routed profile）如何继续走现有模型选择策略
 - [integrations/microsoft-agent-framework.md](../integrations/microsoft-agent-framework.md)：MAF 运行时（runtime）路径说明
-- [OpenSquilla 动态路由实现研究.md](../OpenSquilla%20动态路由实现研究.md)：最初的研究报告

@@ -1,0 +1,297 @@
+using OpenClaw.Core.Models;
+
+namespace OpenClaw.Cli;
+
+internal static class RoutingCommands
+{
+    public static async Task<int> RunAsync(string[] args)
+        => await RunAsync(args, Console.Out, Console.Error);
+
+    internal static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
+        {
+            PrintHelp(output);
+            return 0;
+        }
+
+        var parsed = CliArgs.Parse(args);
+        if (parsed.ShowHelp || parsed.Positionals.Count == 0)
+        {
+            PrintHelp(output);
+            return 0;
+        }
+
+        var command = parsed.Positionals[0].ToLowerInvariant();
+
+        return command switch
+        {
+            "onboard" => await RunOnboardAsync(parsed, output, error),
+            "configure" => await RunConfigureAsync(parsed, output, error),
+            "providers" => await RunProvidersAsync(parsed, output, error),
+            "status" => await RunStatusAsync(parsed, output, error),
+            "diagnostics" => await RunDiagnosticsAsync(parsed, output, error),
+            _ => 2
+        };
+    }
+
+    private const string ConfigOption = "--config";
+
+    private static Task<int> RunOnboardAsync(CliArgs parsed, TextWriter output, TextWriter error)
+    {
+        _ = error;
+        var configPath = ResolveConfigPath(parsed);
+        output.WriteLine($"routing onboard is available. Current config path: {GatewayConfigFile.QuoteIfNeeded(configPath)}");
+        output.WriteLine("Use 'openclaw setup' for interactive onboarding in this release.");
+        return Task.FromResult(0);
+    }
+
+    private static async Task<int> RunConfigureAsync(CliArgs parsed, TextWriter output, TextWriter error)
+    {
+        if (parsed.Positionals.Count < 2)
+        {
+            error.WriteLine("configure target is required. Use: openclaw routing configure <router|providers> [options]");
+            return 2;
+        }
+
+        var target = parsed.Positionals[1].ToLowerInvariant();
+        if (target is not ("router" or "providers"))
+        {
+            error.WriteLine("configure target must be router or providers.");
+            return 2;
+        }
+
+        return target switch
+        {
+            "router" => await ConfigureRouterAsync(parsed, output, error),
+            "providers" => await ConfigureProvidersAsync(parsed, output, error),
+            _ => 2
+        };
+    }
+
+    private static Task<int> RunProvidersAsync(CliArgs parsed, TextWriter output, TextWriter error)
+    {
+        try
+        {
+            var config = GatewayConfigFile.Load(ResolveConfigPath(parsed));
+            var tiers = config.DynamicTurnRouting.Policy.Tiers;
+            WriteTier("T0", tiers.T0, output);
+            WriteTier("T1", tiers.T1, output);
+            WriteTier("T2", tiers.T2, output);
+            WriteTier("T3", tiers.T3, output);
+            return Task.FromResult(0);
+        }
+        catch (Exception ex)
+        {
+            error.WriteLine(ex.Message);
+            return Task.FromResult(1);
+        }
+    }
+
+    private static Task<int> RunStatusAsync(CliArgs parsed, TextWriter output, TextWriter error)
+    {
+        try
+        {
+            var config = GatewayConfigFile.Load(ResolveConfigPath(parsed));
+            var routing = config.DynamicTurnRouting;
+            var policy = routing.Policy;
+            output.WriteLine($"enabled={routing.Enabled}");
+            output.WriteLine($"bundlePath={routing.BundlePath}");
+            output.WriteLine($"classifier={routing.Assets.ClassifierModelPath}");
+            output.WriteLine($"embedding={routing.Assets.EmbeddingModelPath}");
+            output.WriteLine($"tokenizer={routing.Assets.TokenizerPath}");
+            output.WriteLine($"diagnostics={policy.EnableDiagnostics}");
+            output.WriteLine($"marginUpgradeThreshold={policy.MarginUpgradeThreshold:0.00}");
+            output.WriteLine($"r1RescueThreshold={policy.R1RescueThreshold:0.00}");
+            output.WriteLine($"underRoutingSafetyThreshold={policy.UnderRoutingSafetyThreshold:0.00}");
+            output.WriteLine($"deepTurnThreshold={policy.DeepConversationTurnIndexThreshold}");
+            return Task.FromResult(0);
+        }
+        catch (Exception ex)
+        {
+            error.WriteLine(ex.Message);
+            return Task.FromResult(1);
+        }
+    }
+
+    private static async Task<int> RunDiagnosticsAsync(CliArgs parsed, TextWriter output, TextWriter error)
+    {
+        if (parsed.Positionals.Count < 2)
+        {
+            error.WriteLine("diagnostics mode is required. Use: openclaw routing diagnostics <on|off>");
+            return 2;
+        }
+
+        var mode = parsed.Positionals[1].ToLowerInvariant();
+        if (mode is not ("on" or "off"))
+        {
+            error.WriteLine("diagnostics mode must be on or off.");
+            return 2;
+        }
+
+        try
+        {
+            var path = ResolveConfigPath(parsed);
+            var config = GatewayConfigFile.Load(path);
+            config.DynamicTurnRouting.Policy.EnableDiagnostics = mode == "on";
+            await GatewayConfigFile.SaveAsync(config, path);
+            output.WriteLine($"routing diagnostics set to {mode} ({GatewayConfigFile.QuoteIfNeeded(path)})");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static async Task<int> ConfigureRouterAsync(CliArgs parsed, TextWriter output, TextWriter error)
+    {
+        try
+        {
+            var path = ResolveConfigPath(parsed);
+            var config = GatewayConfigFile.Load(path);
+            var policy = config.DynamicTurnRouting.Policy;
+
+            if (TryReadFloatOption(parsed, "--margin-upgrade-threshold", out var margin))
+                policy.MarginUpgradeThreshold = margin;
+            if (TryReadFloatOption(parsed, "--r1-rescue-threshold", out var r1))
+                policy.R1RescueThreshold = r1;
+            if (TryReadFloatOption(parsed, "--under-routing-safety-threshold", out var safety))
+                policy.UnderRoutingSafetyThreshold = safety;
+            if (TryReadIntOption(parsed, "--deep-turn-threshold", out var deepTurn))
+                policy.DeepConversationTurnIndexThreshold = deepTurn;
+
+            await GatewayConfigFile.SaveAsync(config, path);
+            output.WriteLine($"routing configure router saved ({GatewayConfigFile.QuoteIfNeeded(path)})");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static async Task<int> ConfigureProvidersAsync(CliArgs parsed, TextWriter output, TextWriter error)
+    {
+        var tierName = parsed.GetOption("--tier");
+        if (string.IsNullOrWhiteSpace(tierName))
+        {
+            error.WriteLine("--tier <T0|T1|T2|T3> is required for provider configuration.");
+            return 2;
+        }
+
+        try
+        {
+            var path = ResolveConfigPath(parsed);
+            var config = GatewayConfigFile.Load(path);
+            var tier = ResolveTier(config.DynamicTurnRouting.Policy.Tiers, tierName);
+
+            if (TryReadStringOption(parsed, "--model-profile", out var modelProfile))
+                tier.ModelProfileId = modelProfile;
+            if (TryReadStringOption(parsed, "--fallback-profile", out var fallbackProfile))
+                tier.DirectModelFallbackProfileId = fallbackProfile;
+            if (TryReadStringOption(parsed, "--reasoning-level", out var reasoningLevel))
+                tier.ReasoningLevel = reasoningLevel;
+            if (TryReadStringOption(parsed, "--response-policy", out var responsePolicy))
+                tier.ResponsePolicy = responsePolicy;
+            if (TryReadStringOption(parsed, "--image-model-profile", out var imageProfile))
+                tier.ImageCapableModelProfileId = imageProfile;
+            if (TryReadStringOption(parsed, "--allowed-tools", out var allowedTools))
+                tier.AllowedTools = SplitCsv(allowedTools);
+            if (TryReadStringOption(parsed, "--preferred-tags", out var preferredTags))
+                tier.PreferredTags = SplitCsv(preferredTags);
+            if (TryReadStringOption(parsed, "--prompt-mode", out var promptMode))
+                tier.PromptMode = promptMode;
+            if (TryReadBoolOption(parsed, "--disable-tools", out var disableTools))
+                tier.DisableTools = disableTools;
+
+            await GatewayConfigFile.SaveAsync(config, path);
+            output.WriteLine($"routing configure providers saved for {tierName.ToUpperInvariant()} ({GatewayConfigFile.QuoteIfNeeded(path)})");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static string ResolveConfigPath(CliArgs parsed)
+        => Path.GetFullPath(GatewayConfigFile.ExpandPath(parsed.GetOption(ConfigOption) ?? GatewayConfigFile.DefaultConfigPath));
+
+    private static DynamicTurnRoutingTierTarget ResolveTier(DynamicTurnRoutingTierMap tiers, string tierName)
+        => tierName.Trim().ToUpperInvariant() switch
+        {
+            "T0" => tiers.T0,
+            "T1" => tiers.T1,
+            "T2" => tiers.T2,
+            "T3" => tiers.T3,
+            _ => throw new ArgumentException("--tier must be one of T0/T1/T2/T3")
+        };
+
+    private static void WriteTier(string name, DynamicTurnRoutingTierTarget tier, TextWriter output)
+    {
+        var tools = tier.DisableTools ? "disabled" : JoinOrNone(tier.AllowedTools);
+        output.WriteLine($"{name}\tprofile={tier.ModelProfileId}\tfallback={tier.DirectModelFallbackProfileId}\treasoning={tier.ReasoningLevel}\tresponse={tier.ResponsePolicy}\timage={tier.ImageCapableModelProfileId}\tpromptMode={tier.PromptMode}\ttools={tools}\ttags={JoinOrNone(tier.PreferredTags)}");
+    }
+
+    private static bool TryReadStringOption(CliArgs parsed, string option, out string value)
+    {
+        value = parsed.GetOption(option) ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool TryReadFloatOption(CliArgs parsed, string option, out float value)
+    {
+        value = 0f;
+        var raw = parsed.GetOption(option);
+        return !string.IsNullOrWhiteSpace(raw)
+            && float.TryParse(raw, out value);
+    }
+
+    private static bool TryReadIntOption(CliArgs parsed, string option, out int value)
+    {
+        value = 0;
+        var raw = parsed.GetOption(option);
+        return !string.IsNullOrWhiteSpace(raw)
+            && int.TryParse(raw, out value);
+    }
+
+    private static bool TryReadBoolOption(CliArgs parsed, string option, out bool value)
+    {
+        value = false;
+        var raw = parsed.GetOption(option);
+        return !string.IsNullOrWhiteSpace(raw)
+            && bool.TryParse(raw, out value);
+    }
+
+    private static string[] SplitCsv(string value)
+        => value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static item => !string.IsNullOrWhiteSpace(item))
+            .ToArray();
+
+    private static string JoinOrNone(string[] values)
+        => values.Length == 0 ? "none" : string.Join(',', values);
+
+    private static void PrintHelp(TextWriter output)
+    {
+        output.WriteLine(
+            """
+            openclaw routing
+
+            Usage:
+              openclaw routing onboard
+              openclaw routing configure <router|providers> [options]
+              openclaw routing providers [--json]
+              openclaw routing status [--json]
+              openclaw routing diagnostics <on|off> [--config <path>]
+
+            Notes:
+              - Routing remains configuration-driven through OpenClaw:DynamicTurnRouting.
+              - This command group provides operator-oriented routing entry points.
+            """);
+    }
+}

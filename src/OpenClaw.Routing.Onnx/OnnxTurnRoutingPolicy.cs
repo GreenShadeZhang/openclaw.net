@@ -150,9 +150,16 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
         {
             Tier = tierName,
             ModelProfileId = target.ModelProfileId,
+            DirectModelFallbackProfileId = string.IsNullOrWhiteSpace(target.DirectModelFallbackProfileId) ? null : target.DirectModelFallbackProfileId,
             DisableTools = target.DisableTools,
             AllowedTools = target.DisableTools ? [] : target.AllowedTools,
             PreferredTags = target.PreferredTags,
+            ReasoningLevel = string.IsNullOrWhiteSpace(target.ReasoningLevel) ? null : target.ReasoningLevel,
+            ResponsePolicy = string.IsNullOrWhiteSpace(target.ResponsePolicy) ? null : target.ResponsePolicy,
+            ImageCapableModelProfileId = string.IsNullOrWhiteSpace(target.ImageCapableModelProfileId) ? null : target.ImageCapableModelProfileId,
+            CacheContinuitySafeguardsEnabled = target.CacheContinuitySafeguards.Enabled,
+            CacheContinuityMaxConversationTurns = target.CacheContinuitySafeguards.MaxConversationTurns,
+            CacheContinuityResetOnProfileSwitch = target.CacheContinuitySafeguards.ResetOnProfileSwitch,
             SystemPromptSuffix = BuildPromptSuffix(target.PromptMode, target.DisableTools),
             Reason = reason ?? "classifier"
         };
@@ -234,7 +241,7 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
             reasons.Add("margin_upgrade");
         }
 
-        var r1RescueTier = ApplyR1Rescue(tier, probabilities, policy.EnableMarginUpgrade, policy.R1RescueThreshold);
+        var r1RescueTier = ApplyR1Rescue(tier, probabilities, policy.EnableR1Rescue, policy.R1RescueThreshold);
         if (r1RescueTier != tier)
         {
             tier = r1RescueTier;
@@ -409,8 +416,10 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
             Policy = new DynamicTurnRoutingPolicyConfig
             {
                 Tiers = tierMap,
+                EnableDiagnostics = config.Policy.EnableDiagnostics,
                 EnableStickyTier = config.Policy.EnableStickyTier,
                 EnableMarginUpgrade = config.Policy.EnableMarginUpgrade,
+                EnableR1Rescue = config.Policy.EnableR1Rescue,
                 EnableUnderRoutingSafety = config.Policy.EnableUnderRoutingSafety,
                 MarginUpgradeThreshold = config.Policy.MarginUpgradeThreshold,
                 R1RescueThreshold = config.Policy.R1RescueThreshold,
@@ -429,8 +438,15 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
 
     private static bool IsConfiguredDynamicTurnRoutingTier(DynamicTurnRoutingTierTarget tier)
         => !string.IsNullOrWhiteSpace(tier.ModelProfileId)
+        || !string.IsNullOrWhiteSpace(tier.DirectModelFallbackProfileId)
         || tier.AllowedTools.Length > 0
         || tier.PreferredTags.Length > 0
+        || !string.IsNullOrWhiteSpace(tier.ReasoningLevel)
+        || !string.IsNullOrWhiteSpace(tier.ResponsePolicy)
+        || !string.IsNullOrWhiteSpace(tier.ImageCapableModelProfileId)
+        || tier.CacheContinuitySafeguards.Enabled
+        || tier.CacheContinuitySafeguards.MaxConversationTurns != 64
+        || !tier.CacheContinuitySafeguards.ResetOnProfileSwitch
         || !string.Equals(tier.PromptMode, "full", StringComparison.OrdinalIgnoreCase)
         || tier.DisableTools;
 

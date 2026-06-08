@@ -234,6 +234,56 @@ public class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task RunAsync_TurnRoutingDecision_AppliesReasoningAndFallbackForActiveTurn_ThenRestoresSession()
+    {
+        ChatOptions? capturedOptions = null;
+        _chatClient.GetResponseAsync(
+            Arg.Any<IList<ChatMessage>>(),
+            Arg.Do<ChatOptions>(options => capturedOptions = options),
+            Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChatResponse(new[] { new ChatMessage(ChatRole.Assistant, "ok") })));
+
+        var routing = Substitute.For<ITurnRoutingPolicy>();
+        routing.ResolveAsync(Arg.Any<TurnRoutingRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new TurnRoutingDecision
+            {
+                Tier = "T2",
+                ModelProfileId = "frontier-tools",
+                DirectModelFallbackProfileId = "fallback-profile",
+                ReasoningLevel = "high",
+                ResponsePolicy = "detailed"
+            });
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            turnRoutingPolicy: routing);
+
+        var session = new Session
+        {
+            Id = "sess-routing-directives",
+            SenderId = "user1",
+            ChannelId = "test-channel",
+            ReasoningEffort = "low",
+            ResponseMode = SessionResponseModes.ConciseOps,
+            FallbackModelProfileIds = ["existing-fallback"]
+        };
+
+        await agent.RunAsync(session, "analyze and propose plan", CancellationToken.None);
+
+        Assert.NotNull(capturedOptions);
+        Assert.NotNull(capturedOptions!.AdditionalProperties);
+        Assert.Equal("high", capturedOptions.AdditionalProperties!["reasoning_effort"]?.ToString());
+
+        Assert.Equal("low", session.ReasoningEffort);
+        Assert.Equal(SessionResponseModes.ConciseOps, session.ResponseMode);
+        Assert.Equal(["existing-fallback"], session.FallbackModelProfileIds);
+    }
+
+    [Fact]
     public async Task RunAsync_TrimsHistory()
     {
         var session = new Session { Id = "sess1", SenderId = "user1", ChannelId = "test-channel" };

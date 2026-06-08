@@ -21,8 +21,10 @@ public sealed class DynamicTurnRoutingAssetsConfig
 public sealed class DynamicTurnRoutingPolicyConfig
 {
     public DynamicTurnRoutingTierMap Tiers { get; set; } = new();
+    public bool EnableDiagnostics { get; set; }
     public bool EnableStickyTier { get; set; } = true;
     public bool EnableMarginUpgrade { get; set; } = true;
+    public bool EnableR1Rescue { get; set; } = true;
     public bool EnableUnderRoutingSafety { get; set; } = true;
     public float MarginUpgradeThreshold { get; set; } = 0.15f;
     public float R1RescueThreshold { get; set; } = 0.20f;
@@ -41,10 +43,22 @@ public sealed class DynamicTurnRoutingTierMap
 public sealed class DynamicTurnRoutingTierTarget
 {
     public string ModelProfileId { get; set; } = "";
+    public string DirectModelFallbackProfileId { get; set; } = "";
     public string[] AllowedTools { get; set; } = [];
     public string[] PreferredTags { get; set; } = [];
+    public string ReasoningLevel { get; set; } = "";
+    public string ResponsePolicy { get; set; } = "";
+    public string ImageCapableModelProfileId { get; set; } = "";
+    public CacheContinuitySafeguardsConfig CacheContinuitySafeguards { get; set; } = new();
     public string PromptMode { get; set; } = "full";
     public bool DisableTools { get; set; }
+}
+
+public sealed class CacheContinuitySafeguardsConfig
+{
+    public bool Enabled { get; set; }
+    public int MaxConversationTurns { get; set; } = 64;
+    public bool ResetOnProfileSwitch { get; set; } = true;
 }
 
 public sealed class ResolvedDynamicTurnRoutingConfig

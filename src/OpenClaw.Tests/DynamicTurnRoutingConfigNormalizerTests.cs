@@ -23,7 +23,21 @@ public sealed class DynamicTurnRoutingConfigNormalizerTests
             {
                 Tiers = new DynamicTurnRoutingTierMap
                 {
-                    T0 = new DynamicTurnRoutingTierTarget { ModelProfileId = "local-freeform", DisableTools = true },
+                    T0 = new DynamicTurnRoutingTierTarget
+                    {
+                        ModelProfileId = "local-freeform",
+                        DirectModelFallbackProfileId = "local-freeform-fallback",
+                        ReasoningLevel = "low",
+                        ResponsePolicy = "concise",
+                        ImageCapableModelProfileId = "vision-local",
+                        CacheContinuitySafeguards = new CacheContinuitySafeguardsConfig
+                        {
+                            Enabled = true,
+                            MaxConversationTurns = 40,
+                            ResetOnProfileSwitch = false
+                        },
+                        DisableTools = true
+                    },
                     T1 = new DynamicTurnRoutingTierTarget { ModelProfileId = "mini-readonly", AllowedTools = ["read_file"] },
                     T2 = new DynamicTurnRoutingTierTarget { ModelProfileId = "frontier-tools" },
                     T3 = new DynamicTurnRoutingTierTarget { ModelProfileId = "frontier-deep" }
@@ -39,6 +53,13 @@ public sealed class DynamicTurnRoutingConfigNormalizerTests
         Assert.Equal("tokenizer.json", resolved.Assets.TokenizerPath);
         Assert.Equal(384, resolved.Assets.EmbeddingDimensions);
         Assert.Equal("local-freeform", resolved.Tiers.T0.ModelProfileId);
+        Assert.Equal("local-freeform-fallback", resolved.Tiers.T0.DirectModelFallbackProfileId);
+        Assert.Equal("low", resolved.Tiers.T0.ReasoningLevel);
+        Assert.Equal("concise", resolved.Tiers.T0.ResponsePolicy);
+        Assert.Equal("vision-local", resolved.Tiers.T0.ImageCapableModelProfileId);
+        Assert.True(resolved.Tiers.T0.CacheContinuitySafeguards.Enabled);
+        Assert.Equal(40, resolved.Tiers.T0.CacheContinuitySafeguards.MaxConversationTurns);
+        Assert.False(resolved.Tiers.T0.CacheContinuitySafeguards.ResetOnProfileSwitch);
         Assert.Equal("direct", resolved.Source);
     }
 
@@ -62,13 +83,28 @@ public sealed class DynamicTurnRoutingConfigNormalizerTests
             },
             Policy = new DynamicTurnRoutingPolicyConfig
             {
+                EnableDiagnostics = true,
                 EnableStickyTier = false,
                 EnableMarginUpgrade = false,
+                EnableR1Rescue = false,
                 EnableUnderRoutingSafety = false,
                 Tiers = new DynamicTurnRoutingTierMap
                 {
                     T0 = new DynamicTurnRoutingTierTarget { ModelProfileId = "bundle-t0" },
-                    T1 = new DynamicTurnRoutingTierTarget { ModelProfileId = "bundle-t1" },
+                    T1 = new DynamicTurnRoutingTierTarget
+                    {
+                        ModelProfileId = "bundle-t1",
+                        DirectModelFallbackProfileId = "bundle-t1-fallback",
+                        ReasoningLevel = "medium",
+                        ResponsePolicy = "balanced",
+                        ImageCapableModelProfileId = "bundle-vision",
+                        CacheContinuitySafeguards = new CacheContinuitySafeguardsConfig
+                        {
+                            Enabled = true,
+                            MaxConversationTurns = 72,
+                            ResetOnProfileSwitch = false
+                        }
+                    },
                     T2 = new DynamicTurnRoutingTierTarget { ModelProfileId = "bundle-t2" },
                     T3 = new DynamicTurnRoutingTierTarget { ModelProfileId = "bundle-t3" }
                 }
@@ -80,9 +116,18 @@ public sealed class DynamicTurnRoutingConfigNormalizerTests
         Assert.Equal("bundle", resolved.Source);
         Assert.Equal("bundle/classifier.onnx", resolved.Assets.ClassifierModelPath);
         Assert.Equal(390, resolved.Assets.EmbeddingDimensions);
+        Assert.True(resolved.Policy.EnableDiagnostics);
         Assert.False(resolved.Policy.EnableStickyTier);
         Assert.False(resolved.Policy.EnableMarginUpgrade);
+        Assert.False(resolved.Policy.EnableR1Rescue);
         Assert.False(resolved.Policy.EnableUnderRoutingSafety);
+        Assert.Equal("bundle-t1-fallback", resolved.Tiers.T1.DirectModelFallbackProfileId);
+        Assert.Equal("medium", resolved.Tiers.T1.ReasoningLevel);
+        Assert.Equal("balanced", resolved.Tiers.T1.ResponsePolicy);
+        Assert.Equal("bundle-vision", resolved.Tiers.T1.ImageCapableModelProfileId);
+        Assert.True(resolved.Tiers.T1.CacheContinuitySafeguards.Enabled);
+        Assert.Equal(72, resolved.Tiers.T1.CacheContinuitySafeguards.MaxConversationTurns);
+        Assert.False(resolved.Tiers.T1.CacheContinuitySafeguards.ResetOnProfileSwitch);
         Assert.Equal("bundle-t2", resolved.Tiers.T2.ModelProfileId);
     }
 
@@ -160,6 +205,7 @@ public sealed class DynamicTurnRoutingConfigNormalizerTests
             {
                 EnableStickyTier = false,
                 EnableMarginUpgrade = false,
+                EnableR1Rescue = false,
                 EnableUnderRoutingSafety = false,
                 Tiers = BuildTierMap()
             }
@@ -169,6 +215,7 @@ public sealed class DynamicTurnRoutingConfigNormalizerTests
 
         Assert.False(resolved.Policy.EnableStickyTier);
         Assert.False(resolved.Policy.EnableMarginUpgrade);
+        Assert.False(resolved.Policy.EnableR1Rescue);
         Assert.False(resolved.Policy.EnableUnderRoutingSafety);
     }
 

@@ -61,10 +61,20 @@ internal static class DynamicTurnRoutingConfigNormalizer
             bundle.Policy.EnableStickyTier,
             DefaultPolicy.EnableStickyTier);
 
+        var enableDiagnostics = ChoosePolicyBool(
+            config.Policy.EnableDiagnostics,
+            bundle.Policy.EnableDiagnostics,
+            DefaultPolicy.EnableDiagnostics);
+
         var enableMarginUpgrade = ChoosePolicyBool(
             config.Policy.EnableMarginUpgrade,
             bundle.Policy.EnableMarginUpgrade,
             DefaultPolicy.EnableMarginUpgrade);
+
+        var enableR1Rescue = ChoosePolicyBool(
+            config.Policy.EnableR1Rescue,
+            bundle.Policy.EnableR1Rescue,
+            DefaultPolicy.EnableR1Rescue);
 
         var enableUnderRoutingSafety = ChoosePolicyBool(
             config.Policy.EnableUnderRoutingSafety,
@@ -107,8 +117,10 @@ internal static class DynamicTurnRoutingConfigNormalizer
             Policy = new DynamicTurnRoutingPolicyConfig
             {
                 Tiers = tiers,
+                EnableDiagnostics = enableDiagnostics,
                 EnableStickyTier = enableStickyTier,
                 EnableMarginUpgrade = enableMarginUpgrade,
+                EnableR1Rescue = enableR1Rescue,
                 EnableUnderRoutingSafety = enableUnderRoutingSafety,
                 MarginUpgradeThreshold = marginUpgradeThreshold,
                 R1RescueThreshold = r1RescueThreshold,
@@ -130,8 +142,15 @@ internal static class DynamicTurnRoutingConfigNormalizer
 
     private static bool IsConfigured(DynamicTurnRoutingTierTarget tier)
         => !string.IsNullOrWhiteSpace(tier.ModelProfileId)
+        || !string.IsNullOrWhiteSpace(tier.DirectModelFallbackProfileId)
         || tier.AllowedTools.Length > 0
         || tier.PreferredTags.Length > 0
+        || !string.IsNullOrWhiteSpace(tier.ReasoningLevel)
+        || !string.IsNullOrWhiteSpace(tier.ResponsePolicy)
+        || !string.IsNullOrWhiteSpace(tier.ImageCapableModelProfileId)
+        || tier.CacheContinuitySafeguards.Enabled
+        || tier.CacheContinuitySafeguards.MaxConversationTurns != 64
+        || !tier.CacheContinuitySafeguards.ResetOnProfileSwitch
         || !string.Equals(tier.PromptMode, "full", StringComparison.OrdinalIgnoreCase)
         || tier.DisableTools;
 

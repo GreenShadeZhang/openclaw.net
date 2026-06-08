@@ -90,9 +90,9 @@ OpenClaw can classify each incoming user turn into `T0` through `T3` and map tha
 
 Required local assets:
 
-- `Classifier.ModelPath`: LightGBM-exported ONNX classifier
-- `Embeddings.ModelPath`: local embedding ONNX model
-- `Embeddings.TokenizerPath`: tokenizer JSON for the embedding model
+- `Assets.ClassifierModelPath`: LightGBM-exported ONNX classifier
+- `Assets.EmbeddingModelPath`: local embedding ONNX model
+- `Assets.TokenizerPath`: tokenizer JSON for the embedding model
 
 Example configuration:
 
@@ -101,24 +101,40 @@ Example configuration:
   "OpenClaw": {
     "DynamicTurnRouting": {
       "Enabled": true,
-      "Classifier": {
-        "ModelPath": "models/routing/squilla_classifier.onnx"
-      },
-      "Embeddings": {
-        "ModelPath": "models/routing/minilm/model.onnx",
+      "Assets": {
+        "ClassifierModelPath": "models/routing/squilla_classifier.onnx",
+        "EmbeddingModelPath": "models/routing/minilm/model.onnx",
         "TokenizerPath": "models/routing/minilm/tokenizer.json",
         "Dimensions": 384
       },
-      "Tiers": {
-        "T0": { "ModelProfileId": "local-freeform", "DisableTools": true, "PromptMode": "minimal" },
-        "T1": { "ModelProfileId": "mini-readonly", "AllowedTools": ["read_file"], "PromptMode": "compact" },
-        "T2": { "ModelProfileId": "frontier-tools", "PromptMode": "full" },
-        "T3": { "ModelProfileId": "frontier-deep", "PromptMode": "full" }
+      "Policy": {
+        "Tiers": {
+          "T0": { "ModelProfileId": "local-freeform", "DisableTools": true, "PromptMode": "minimal" },
+          "T1": { "ModelProfileId": "mini-readonly", "AllowedTools": ["read_file"], "PromptMode": "compact" },
+          "T2": {
+            "ModelProfileId": "frontier-tools",
+            "DirectModelFallbackProfileId": "frontier-tools-fallback",
+            "ReasoningLevel": "medium",
+            "ResponsePolicy": "balanced",
+            "ImageCapableModelProfileId": "frontier-vision",
+            "PromptMode": "full"
+          },
+          "T3": { "ModelProfileId": "frontier-deep", "PromptMode": "full" }
+        }
       }
     }
   }
 }
 ```
+
+Operator CLI surface for routing management:
+
+- `openclaw routing onboard`
+- `openclaw routing configure router`
+- `openclaw routing configure providers`
+- `openclaw routing providers`
+- `openclaw routing status`
+- `openclaw routing diagnostics on|off`
 
 If asset loading or ONNX inference fails, the router falls back to `T2` and the request still runs through the standard model-profile pipeline.
 
