@@ -268,12 +268,10 @@ public sealed class LocalOnnxEmbeddingGenerator : ILocalEmbeddingGenerator, IDis
                 throw new InvalidOperationException("WordPiece tokenizer 'vocab' must be a JSON object mapping token to id.");
 
             var pairs = new List<(string Token, int Id)>();
-            foreach (var property in vocabElement.EnumerateObject())
+            foreach (var property in vocabElement.EnumerateObject().Where(static property => property.Value.ValueKind == JsonValueKind.Number))
             {
-                if (property.Value.ValueKind != JsonValueKind.Number || !property.Value.TryGetInt32(out var id) || id < 0)
-                    continue;
-
-                pairs.Add((property.Name, id));
+                if (property.Value.TryGetInt32(out var id) && id >= 0)
+                    pairs.Add((property.Name, id));
             }
 
             if (pairs.Count == 0)
