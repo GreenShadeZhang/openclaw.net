@@ -20,7 +20,7 @@ public sealed class LocalOnnxEmbeddingGeneratorTests
             tokenizerPath: "test-tokenizer.json");
 
         ValueTask<float[]> valueTask = default;
-        var callReturned = new ManualResetEventSlim();
+        using var callReturned = new ManualResetEventSlim();
         var caller = Task.Run(() =>
         {
             valueTask = generator.GenerateAsync("hello", CancellationToken.None);
