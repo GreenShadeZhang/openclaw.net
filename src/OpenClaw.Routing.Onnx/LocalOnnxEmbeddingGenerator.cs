@@ -426,7 +426,7 @@ internal sealed class OnnxEmbeddingModelRunner : IEmbeddingModelRunner
         }
 
         // Second pass: fall back to mean-pooling over a rank-3 hidden-state tensor.
-        foreach (var result in results.Where(result => TryGetPooledEmbedding(result, attentionMask, out _)))
+        foreach (var result in results)
         {
             if (TryGetPooledEmbedding(result, attentionMask, out var pooledEmbedding))
                 return pooledEmbedding;
