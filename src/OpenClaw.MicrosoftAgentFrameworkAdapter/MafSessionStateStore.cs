@@ -195,10 +195,11 @@ public sealed class MafSessionStateStore
                 .OrderBy(static item => item, StringComparer.Ordinal));
         var systemPromptOverride = session.SystemPromptOverride ?? string.Empty;
         var routePresetId = session.RoutePresetId ?? string.Empty;
+        var routeToolsDisabled = session.RouteToolsDisabled ? "1" : "0";
         var routeAllowedTools = session.RouteAllowedTools.Length == 0
             ? string.Empty
             : string.Join(",", session.RouteAllowedTools.OrderBy(static item => item, StringComparer.OrdinalIgnoreCase));
-        var payload = $"{modelOverride}\n{modelProfileId}\n{preferredModelTags}\n{systemPromptOverride}\n{routePresetId}\n{routeAllowedTools}\n{historyJson}";
+        var payload = $"{modelOverride}\n{modelProfileId}\n{preferredModelTags}\n{systemPromptOverride}\n{routePresetId}\n{routeToolsDisabled}\n{routeAllowedTools}\n{historyJson}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
     }
 }

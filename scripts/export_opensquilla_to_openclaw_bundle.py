@@ -292,7 +292,7 @@ def main() -> int:
     parser.add_argument(
         "--source-dir",
         type=Path,
-        default=Path("E:/GitHub/opensquilla/src/opensquilla/squilla_router/models/v4.2_phase3_inference"),
+        required=True,
         help="OpenSquilla source model directory",
     )
     parser.add_argument(

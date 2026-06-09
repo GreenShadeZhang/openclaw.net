@@ -8,12 +8,15 @@ internal sealed class OpenSquillaBundleLoader : IOpenSquillaBundleLoader
 {
     public BundleRoutingConfig Load(string bundlePath)
     {
-        var manifestPath = Path.Combine(bundlePath, "manifest.json");
-        var manifestAssets = LoadManifestAssetPaths(bundlePath, manifestPath);
-        var classifierPath = FirstNonEmpty(manifestAssets.ClassifierModelPath, Path.Combine(bundlePath, "classifier.onnx"));
-        var embeddingPath = FirstNonEmpty(manifestAssets.EmbeddingModelPath, Path.Combine(bundlePath, "embeddings.onnx"));
-        var tokenizerPath = FirstNonEmpty(manifestAssets.TokenizerPath, Path.Combine(bundlePath, "tokenizer.json"));
-        var runtimeConfigPath = FirstNonEmpty(manifestAssets.RuntimeConfigPath, Path.Combine(bundlePath, "runtime-config.json"));
+        ArgumentException.ThrowIfNullOrWhiteSpace(bundlePath);
+
+        var resolvedBundlePath = Path.GetFullPath(bundlePath);
+        var manifestPath = ResolveBundleFilePath(resolvedBundlePath, "manifest.json");
+        var manifestAssets = LoadManifestAssetPaths(resolvedBundlePath, manifestPath);
+        var classifierPath = FirstNonEmpty(manifestAssets.ClassifierModelPath, ResolveBundleFilePath(resolvedBundlePath, "classifier.onnx"));
+        var embeddingPath = FirstNonEmpty(manifestAssets.EmbeddingModelPath, ResolveBundleFilePath(resolvedBundlePath, "embeddings.onnx"));
+        var tokenizerPath = FirstNonEmpty(manifestAssets.TokenizerPath, ResolveBundleFilePath(resolvedBundlePath, "tokenizer.json"));
+        var runtimeConfigPath = FirstNonEmpty(manifestAssets.RuntimeConfigPath, ResolveBundleFilePath(resolvedBundlePath, "runtime-config.json"));
 
         return new BundleRoutingConfig
         {
@@ -33,6 +36,9 @@ internal sealed class OpenSquillaBundleLoader : IOpenSquillaBundleLoader
     private static string FirstNonEmpty(params string[] values)
         => values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value)) ?? "";
 
+    private static string ResolveBundleFilePath(string bundlePath, string fileName)
+        => Path.Join(bundlePath, fileName);
+
     private static DynamicTurnRoutingAssetsConfig LoadManifestAssetPaths(string bundlePath, string manifestPath)
     {
         if (!File.Exists(manifestPath))
@@ -50,9 +56,9 @@ internal sealed class OpenSquillaBundleLoader : IOpenSquillaBundleLoader
                 RuntimeConfigPath = ResolveManifestPath(bundlePath, TryFindString(document.RootElement, "runtimeconfigpath", "runtimeconfig"))
             };
         }
-        catch
+        catch (Exception ex)
         {
-            return new DynamicTurnRoutingAssetsConfig();
+            throw new InvalidOperationException($"Failed to load OpenSquilla bundle manifest '{manifestPath}'.", ex);
         }
     }
 
@@ -123,9 +129,9 @@ internal sealed class OpenSquillaBundleLoader : IOpenSquillaBundleLoader
             using var document = JsonDocument.Parse(stream);
             return TryFindEmbeddingDimensions(document.RootElement, out dimensions);
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            throw new InvalidOperationException($"Failed to read routing embedding dimensions from '{jsonPath}'.", ex);
         }
     }
 
@@ -149,23 +155,12 @@ internal sealed class OpenSquillaBundleLoader : IOpenSquillaBundleLoader
 
         if (element.ValueKind == JsonValueKind.Array)
         {
-            var matchedDimensions = 0;
-            var match = element.EnumerateArray()
-                .Where(item =>
-                {
-                    if (TryFindEmbeddingDimensions(item, out var candidateDimensions))
-                    {
-                        matchedDimensions = candidateDimensions;
-                        return true;
-                    }
-
-                    return false;
-                })
-                .FirstOrDefault();
-
-            if (match.ValueKind != JsonValueKind.Undefined)
+            foreach (var candidate in element
+                .EnumerateArray()
+                .Select(static item => (Found: TryFindEmbeddingDimensions(item, out var itemDimensions), Dimensions: itemDimensions))
+                .Where(static candidate => candidate.Found))
             {
-                dimensions = matchedDimensions;
+                dimensions = candidate.Dimensions;
                 return true;
             }
         }

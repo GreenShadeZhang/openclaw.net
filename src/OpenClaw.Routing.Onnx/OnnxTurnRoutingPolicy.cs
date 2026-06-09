@@ -40,13 +40,26 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
 
         if (_classifierAvailable)
         {
+            LocalOnnxEmbeddingGenerator? embeddingGenerator = null;
+            OnnxTierClassifier? tierClassifier = null;
+
             try
             {
-                var embeddingGenerator = new LocalOnnxEmbeddingGenerator(
+                if (config.Assets.EmbeddingDimensions != PromptFeatureExtractor.EmbeddingSegmentDimensions)
+                {
+                    logger.LogWarning(
+                        "ONNX routing embedding dimension mismatch during initialization. Configuration declares {ConfiguredDimensions} dimensions but runtime extractor requires {ExpectedDimensions}. Dynamic routing will fall back to T2.",
+                        config.Assets.EmbeddingDimensions,
+                        PromptFeatureExtractor.EmbeddingSegmentDimensions);
+                    _classifierAvailable = false;
+                    return;
+                }
+
+                embeddingGenerator = new LocalOnnxEmbeddingGenerator(
                     config.Assets.EmbeddingModelPath,
                     config.Assets.TokenizerPath,
                     config.Assets.EmbeddingDimensions);
-                var tierClassifier = new OnnxTierClassifier(config.Assets.ClassifierModelPath);
+                tierClassifier = new OnnxTierClassifier(config.Assets.ClassifierModelPath);
 
                 if (!IsClassifierFeatureCountCompatible(tierClassifier.ExpectedFeatureCount))
                 {
@@ -67,10 +80,8 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
             {
                 logger.LogWarning(ex, "Failed to initialize ONNX routing components; dynamic routing will fall back to T2.");
                 _classifierAvailable = false;
-                (_embeddingGenerator as IDisposable)?.Dispose();
-                _embeddingGenerator = null;
-                (_tierClassifier as IDisposable)?.Dispose();
-                _tierClassifier = null;
+                embeddingGenerator?.Dispose();
+                tierClassifier?.Dispose();
             }
         }
     }
@@ -125,8 +136,8 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
         {
             var featureInput = BuildFeatureInput(request);
             var currentEmbedding = await _embeddingGenerator.GenerateAsync(featureInput.CurrentUserText, cancellationToken);
-            var historyEmbedding = await GenerateOptionalEmbeddingAsync(_embeddingGenerator, string.Join("\n", featureInput.PriorUserTurns), _config.Assets.EmbeddingDimensions, cancellationToken);
-            var assistantEmbedding = await GenerateOptionalEmbeddingAsync(_embeddingGenerator, featureInput.PreviousAssistantText, _config.Assets.EmbeddingDimensions, cancellationToken);
+            var historyEmbedding = await GenerateOptionalEmbeddingAsync(_embeddingGenerator, string.Join("\n", featureInput.PriorUserTurns), cancellationToken);
+            var assistantEmbedding = await GenerateOptionalEmbeddingAsync(_embeddingGenerator, featureInput.PreviousAssistantText, cancellationToken);
 
             var features = PromptFeatureExtractor.BuildFeatureVector(featureInput, currentEmbedding, historyEmbedding, assistantEmbedding);
             var classification = _tierClassifier.PredictTier(features);
@@ -196,11 +207,10 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
     private static async ValueTask<float[]> GenerateOptionalEmbeddingAsync(
         ILocalEmbeddingGenerator embeddingGenerator,
         string? text,
-        int dimensions,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return new float[dimensions];
+            return new float[PromptFeatureExtractor.EmbeddingSegmentDimensions];
 
         return await embeddingGenerator.GenerateAsync(text, cancellationToken);
     }
@@ -496,26 +506,6 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
             Tiers = tierMap
         };
     }
-
-    private static bool HasAnyConfiguredDynamicTurnRoutingTier(DynamicTurnRoutingTierMap tiers)
-        => IsConfiguredDynamicTurnRoutingTier(tiers.T0)
-        || IsConfiguredDynamicTurnRoutingTier(tiers.T1)
-        || IsConfiguredDynamicTurnRoutingTier(tiers.T2)
-        || IsConfiguredDynamicTurnRoutingTier(tiers.T3);
-
-    private static bool IsConfiguredDynamicTurnRoutingTier(DynamicTurnRoutingTierTarget tier)
-        => !string.IsNullOrWhiteSpace(tier.ModelProfileId)
-        || !string.IsNullOrWhiteSpace(tier.DirectModelFallbackProfileId)
-        || tier.AllowedTools.Length > 0
-        || tier.PreferredTags.Length > 0
-        || !string.IsNullOrWhiteSpace(tier.ReasoningLevel)
-        || !string.IsNullOrWhiteSpace(tier.ResponsePolicy)
-        || !string.IsNullOrWhiteSpace(tier.ImageCapableModelProfileId)
-        || tier.CacheContinuitySafeguards.Enabled
-        || tier.CacheContinuitySafeguards.MaxConversationTurns != 64
-        || !tier.CacheContinuitySafeguards.ResetOnProfileSwitch
-        || !string.Equals(tier.PromptMode, "full", StringComparison.OrdinalIgnoreCase)
-        || tier.DisableTools;
 
     private sealed class OnnxTierClassifier : ITierClassifier, IDisposable
     {

@@ -713,14 +713,9 @@ public static class ConfigValidator
             if (policy.DeepConversationTurnIndexThreshold < 0)
                 errors.Add("DynamicTurnRouting.Policy.DeepConversationTurnIndexThreshold must be >= 0.");
 
-            var classifierPath = FirstNonEmptyDynamicTurnRoutingValue(
-                config.DynamicTurnRouting.Assets.ClassifierModelPath);
-
-            var embeddingPath = FirstNonEmptyDynamicTurnRoutingValue(
-                config.DynamicTurnRouting.Assets.EmbeddingModelPath);
-
-            var tokenizerPath = FirstNonEmptyDynamicTurnRoutingValue(
-                config.DynamicTurnRouting.Assets.TokenizerPath);
+            var classifierPath = config.DynamicTurnRouting.Assets.ClassifierModelPath;
+            var embeddingPath = config.DynamicTurnRouting.Assets.EmbeddingModelPath;
+            var tokenizerPath = config.DynamicTurnRouting.Assets.TokenizerPath;
 
             var usesBundlePath = !string.IsNullOrWhiteSpace(config.DynamicTurnRouting.BundlePath);
             if (!usesBundlePath)
@@ -771,22 +766,6 @@ public static class ConfigValidator
 
         errors.Add($"DynamicTurnRouting.{tierName}.ModelProfileId '{target.ModelProfileId}' does not exist in Models.Profiles.");
     }
-
-    private static string FirstNonEmptyDynamicTurnRoutingValue(params string[] values)
-        => values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value)) ?? "";
-
-    private static bool HasAnyConfiguredDynamicTurnRoutingTier(DynamicTurnRoutingTierMap tiers)
-        => IsConfiguredDynamicTurnRoutingTier(tiers.T0)
-        || IsConfiguredDynamicTurnRoutingTier(tiers.T1)
-        || IsConfiguredDynamicTurnRoutingTier(tiers.T2)
-        || IsConfiguredDynamicTurnRoutingTier(tiers.T3);
-
-    private static bool IsConfiguredDynamicTurnRoutingTier(DynamicTurnRoutingTierTarget tier)
-        => !string.IsNullOrWhiteSpace(tier.ModelProfileId)
-        || tier.AllowedTools.Length > 0
-        || tier.PreferredTags.Length > 0
-        || !string.Equals(tier.PromptMode, "full", StringComparison.OrdinalIgnoreCase)
-        || tier.DisableTools;
 
     private static string ResolveConfiguredPath(string? path)
         => ConfigPathResolver.Resolve(path);

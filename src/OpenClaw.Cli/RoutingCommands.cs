@@ -1,4 +1,5 @@
 using OpenClaw.Core.Models;
+using System.Globalization;
 
 namespace OpenClaw.Cli;
 
@@ -182,14 +183,25 @@ internal static class RoutingCommands
 
             var policy = config.DynamicTurnRouting.Policy;
 
-            if (TryReadFloatOption(parsed, "--margin-upgrade-threshold", out var margin))
+            if (TryReadFloatOption(parsed, "--margin-upgrade-threshold", out var margin, out var parseError))
                 policy.MarginUpgradeThreshold = margin;
-            if (TryReadFloatOption(parsed, "--r1-rescue-threshold", out var r1))
+            else if (parseError is not null)
+                return WriteUsageError(error, parseError);
+
+            if (TryReadFloatOption(parsed, "--r1-rescue-threshold", out var r1, out parseError))
                 policy.R1RescueThreshold = r1;
-            if (TryReadFloatOption(parsed, "--under-routing-safety-threshold", out var safety))
+            else if (parseError is not null)
+                return WriteUsageError(error, parseError);
+
+            if (TryReadFloatOption(parsed, "--under-routing-safety-threshold", out var safety, out parseError))
                 policy.UnderRoutingSafetyThreshold = safety;
-            if (TryReadIntOption(parsed, "--deep-turn-threshold", out var deepTurn))
+            else if (parseError is not null)
+                return WriteUsageError(error, parseError);
+
+            if (TryReadIntOption(parsed, "--deep-turn-threshold", out var deepTurn, out parseError))
                 policy.DeepConversationTurnIndexThreshold = deepTurn;
+            else if (parseError is not null)
+                return WriteUsageError(error, parseError);
 
             await GatewayConfigFile.SaveAsync(config, path);
             output.WriteLine($"routing configure router saved ({GatewayConfigFile.QuoteIfNeeded(path)})");
@@ -233,8 +245,10 @@ internal static class RoutingCommands
                 tier.PreferredTags = SplitCsv(preferredTags);
             if (TryReadStringOption(parsed, "--prompt-mode", out var promptMode))
                 tier.PromptMode = promptMode;
-            if (TryReadBoolOption(parsed, "--disable-tools", out var disableTools))
+            if (TryReadBoolOption(parsed, "--disable-tools", out var disableTools, out var parseError))
                 tier.DisableTools = disableTools;
+            else if (parseError is not null)
+                return WriteUsageError(error, parseError);
 
             await GatewayConfigFile.SaveAsync(config, path);
             output.WriteLine($"routing configure providers saved for {tierName.ToUpperInvariant()} ({GatewayConfigFile.QuoteIfNeeded(path)})");
@@ -272,28 +286,55 @@ internal static class RoutingCommands
         return !string.IsNullOrWhiteSpace(value);
     }
 
-    private static bool TryReadFloatOption(CliArgs parsed, string option, out float value)
+    private static bool TryReadFloatOption(CliArgs parsed, string option, out float value, out string? error)
     {
+        error = null;
         value = 0f;
         var raw = parsed.GetOption(option);
-        return !string.IsNullOrWhiteSpace(raw)
-            && float.TryParse(raw, out value);
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        if (float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+            return true;
+
+        error = $"{option} must be a valid number.";
+        return false;
     }
 
-    private static bool TryReadIntOption(CliArgs parsed, string option, out int value)
+    private static bool TryReadIntOption(CliArgs parsed, string option, out int value, out string? error)
     {
+        error = null;
         value = 0;
         var raw = parsed.GetOption(option);
-        return !string.IsNullOrWhiteSpace(raw)
-            && int.TryParse(raw, out value);
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+            return true;
+
+        error = $"{option} must be a valid integer.";
+        return false;
     }
 
-    private static bool TryReadBoolOption(CliArgs parsed, string option, out bool value)
+    private static bool TryReadBoolOption(CliArgs parsed, string option, out bool value, out string? error)
     {
+        error = null;
         value = false;
         var raw = parsed.GetOption(option);
-        return !string.IsNullOrWhiteSpace(raw)
-            && bool.TryParse(raw, out value);
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        if (bool.TryParse(raw, out value))
+            return true;
+
+        error = $"{option} must be true or false.";
+        return false;
+    }
+
+    private static int WriteUsageError(TextWriter error, string message)
+    {
+        error.WriteLine(message);
+        return 2;
     }
 
     private static string[] SplitCsv(string value)
@@ -358,8 +399,8 @@ internal static class RoutingCommands
               openclaw routing configure <router|providers> [options]
                             openclaw routing configure router [--router recommended|openrouter-mix|disabled] [--margin-upgrade-threshold <n>] [--r1-rescue-threshold <n>] [--under-routing-safety-threshold <n>] [--deep-turn-threshold <n>] [--config <path>]
                             openclaw routing configure providers --tier <T0|T1|T2|T3> [--model-profile <id>] [--fallback-profile <id>] [--reasoning-level <level>] [--response-policy <policy>] [--image-model-profile <id>] [--allowed-tools <csv>] [--preferred-tags <csv>] [--prompt-mode <full|minimal|compact>] [--disable-tools <true|false>] [--config <path>]
-              openclaw routing providers [--json]
-              openclaw routing status [--json]
+              openclaw routing providers
+              openclaw routing status
               openclaw routing diagnostics <on|off> [--config <path>]
 
             Notes:

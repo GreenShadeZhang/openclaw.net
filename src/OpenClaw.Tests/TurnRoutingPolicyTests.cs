@@ -100,6 +100,7 @@ public sealed class TurnRoutingPolicyTests
             || string.Equals(decision.Tier, "T3", StringComparison.Ordinal),
             $"Unexpected tier: {decision.Tier}");
         Assert.NotEqual("classifier_unavailable", decision.Reason);
+        Assert.NotEqual("classifier_runtime_error", decision.Reason);
     }
 
     [Fact]
@@ -134,6 +135,7 @@ public sealed class TurnRoutingPolicyTests
             || string.Equals(decision.Tier, "T3", StringComparison.Ordinal),
             $"Unexpected tier: {decision.Tier}");
         Assert.NotEqual("classifier_unavailable", decision.Reason);
+        Assert.NotEqual("classifier_runtime_error", decision.Reason);
     }
 
     [Fact]
@@ -565,11 +567,23 @@ public sealed class TurnRoutingPolicyTests
 
     private sealed class StubEmbeddingGenerator(float[] vector) : ILocalEmbeddingGenerator
     {
+        private readonly float[] _vector = NormalizeVector(vector);
+
         public ValueTask<float[]> GenerateAsync(string text, CancellationToken cancellationToken)
         {
             _ = text;
             _ = cancellationToken;
-            return ValueTask.FromResult(vector);
+            return ValueTask.FromResult(_vector);
+        }
+
+        private static float[] NormalizeVector(float[] source)
+        {
+            if (source.Length == PromptFeatureExtractor.EmbeddingSegmentDimensions)
+                return source;
+
+            var normalized = new float[PromptFeatureExtractor.EmbeddingSegmentDimensions];
+            source.AsSpan(0, Math.Min(source.Length, normalized.Length)).CopyTo(normalized);
+            return normalized;
         }
     }
 

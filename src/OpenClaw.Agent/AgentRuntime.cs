@@ -960,6 +960,10 @@ public sealed class AgentRuntime : IAgentRuntime
 
             messages.Insert(Math.Min(2, messages.Count), new ChatMessage(ChatRole.User, text));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "User profile recall injection failed; continuing without profile context.");

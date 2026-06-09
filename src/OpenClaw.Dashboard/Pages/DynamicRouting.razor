@@ -5,6 +5,7 @@
 @inject AuthService Auth
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject ILogger<DynamicRouting> Logger
 
 @using System.Text.Json
 
@@ -469,7 +470,7 @@
                                            Color="Color.Secondary"
                                            Size="Size.Small"
                                            StartIcon="@Icons.Material.Filled.Edit"
-                                           OnClick="@(() => EditPolicyAsync(context))">
+                                           OnClick="@(() => EditPolicy(context))">
                                     @L["common.edit"]
                                 </MudButton>
 
@@ -739,8 +740,9 @@
             EnsurePolicyDraftDefaults();
             _hasLoaded = true;
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.LogWarning(ex, "Failed to load Dynamic Routing dashboard data.");
             _error = L["common.error"];
             Snackbar.Add(L["common.error"], Severity.Error);
         }
@@ -885,7 +887,7 @@
         }
     }
 
-    private void EditPolicyAsync(JsonElement policy)
+    private void EditPolicy(JsonElement policy)
     {
         _editingPolicyId = ReadString(policy, "id");
         _policyId = _editingPolicyId ?? string.Empty;

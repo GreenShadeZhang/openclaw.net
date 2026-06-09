@@ -44,7 +44,7 @@ internal static class DynamicTurnRoutingConfigNormalizer
             config.Assets.TokenizerPath,
             bundle.Assets.TokenizerPath);
 
-        var tiers = HasAnyConfiguredTier(config.Policy.Tiers)
+        var tiers = DynamicTurnRoutingTierTargets.HasAnyConfigured(config.Policy.Tiers)
             ? config.Policy.Tiers
             : bundle.Policy.Tiers;
 
@@ -133,26 +133,6 @@ internal static class DynamicTurnRoutingConfigNormalizer
 
     private static string FirstNonEmpty(params string[] values)
         => values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value)) ?? "";
-
-    private static bool HasAnyConfiguredTier(DynamicTurnRoutingTierMap tiers)
-        => IsConfigured(tiers.T0)
-        || IsConfigured(tiers.T1)
-        || IsConfigured(tiers.T2)
-        || IsConfigured(tiers.T3);
-
-    private static bool IsConfigured(DynamicTurnRoutingTierTarget tier)
-        => !string.IsNullOrWhiteSpace(tier.ModelProfileId)
-        || !string.IsNullOrWhiteSpace(tier.DirectModelFallbackProfileId)
-        || tier.AllowedTools.Length > 0
-        || tier.PreferredTags.Length > 0
-        || !string.IsNullOrWhiteSpace(tier.ReasoningLevel)
-        || !string.IsNullOrWhiteSpace(tier.ResponsePolicy)
-        || !string.IsNullOrWhiteSpace(tier.ImageCapableModelProfileId)
-        || tier.CacheContinuitySafeguards.Enabled
-        || tier.CacheContinuitySafeguards.MaxConversationTurns != 64
-        || !tier.CacheContinuitySafeguards.ResetOnProfileSwitch
-        || !string.Equals(tier.PromptMode, "full", StringComparison.OrdinalIgnoreCase)
-        || tier.DisableTools;
 
     private static bool HasConfiguredModernAssets(DynamicTurnRoutingAssetsConfig assets)
         => !string.IsNullOrWhiteSpace(assets.ClassifierModelPath)

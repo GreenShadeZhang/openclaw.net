@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using OpenClaw.Agent.Routing;
 using OpenClaw.Core.Models;
 using OpenClaw.Routing.Onnx;
+using System.Globalization;
 using System.Text.Json;
 using Xunit;
 
@@ -322,6 +323,10 @@ public sealed class TurnRoutingQualityBaselineTests
     [Fact]
     public void ResolveScoreWeights_WhenEnvVarsAreInvalid_FallsBackToDefaults()
     {
+        var originalUnderRouting = Environment.GetEnvironmentVariable(UnderRoutingPenaltyWeightEnvironmentVariable);
+        var originalOverRouting = Environment.GetEnvironmentVariable(OverRoutingPenaltyWeightEnvironmentVariable);
+        var originalHighRiskRecall = Environment.GetEnvironmentVariable(HighRiskRecallRewardWeightEnvironmentVariable);
+
         Environment.SetEnvironmentVariable(UnderRoutingPenaltyWeightEnvironmentVariable, "-1");
         Environment.SetEnvironmentVariable(OverRoutingPenaltyWeightEnvironmentVariable, "abc");
         Environment.SetEnvironmentVariable(HighRiskRecallRewardWeightEnvironmentVariable, "0");
@@ -336,15 +341,19 @@ public sealed class TurnRoutingQualityBaselineTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(UnderRoutingPenaltyWeightEnvironmentVariable, null);
-            Environment.SetEnvironmentVariable(OverRoutingPenaltyWeightEnvironmentVariable, null);
-            Environment.SetEnvironmentVariable(HighRiskRecallRewardWeightEnvironmentVariable, null);
+            Environment.SetEnvironmentVariable(UnderRoutingPenaltyWeightEnvironmentVariable, originalUnderRouting);
+            Environment.SetEnvironmentVariable(OverRoutingPenaltyWeightEnvironmentVariable, originalOverRouting);
+            Environment.SetEnvironmentVariable(HighRiskRecallRewardWeightEnvironmentVariable, originalHighRiskRecall);
         }
     }
 
     [Fact]
     public void ResolveScoreWeights_WhenEnvVarsAreValid_UsesConfiguredValues()
     {
+        var originalUnderRouting = Environment.GetEnvironmentVariable(UnderRoutingPenaltyWeightEnvironmentVariable);
+        var originalOverRouting = Environment.GetEnvironmentVariable(OverRoutingPenaltyWeightEnvironmentVariable);
+        var originalHighRiskRecall = Environment.GetEnvironmentVariable(HighRiskRecallRewardWeightEnvironmentVariable);
+
         Environment.SetEnvironmentVariable(UnderRoutingPenaltyWeightEnvironmentVariable, "0.9");
         Environment.SetEnvironmentVariable(OverRoutingPenaltyWeightEnvironmentVariable, "0.4");
         Environment.SetEnvironmentVariable(HighRiskRecallRewardWeightEnvironmentVariable, "0.6");
@@ -359,9 +368,9 @@ public sealed class TurnRoutingQualityBaselineTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(UnderRoutingPenaltyWeightEnvironmentVariable, null);
-            Environment.SetEnvironmentVariable(OverRoutingPenaltyWeightEnvironmentVariable, null);
-            Environment.SetEnvironmentVariable(HighRiskRecallRewardWeightEnvironmentVariable, null);
+            Environment.SetEnvironmentVariable(UnderRoutingPenaltyWeightEnvironmentVariable, originalUnderRouting);
+            Environment.SetEnvironmentVariable(OverRoutingPenaltyWeightEnvironmentVariable, originalOverRouting);
+            Environment.SetEnvironmentVariable(HighRiskRecallRewardWeightEnvironmentVariable, originalHighRiskRecall);
         }
     }
 
@@ -392,7 +401,7 @@ public sealed class TurnRoutingQualityBaselineTests
             "T1" => 1,
             "T2" => 2,
             "T3" => 3,
-            _ => 2
+            _ => throw new ArgumentException($"Unexpected routing tier '{tier}'.", nameof(tier))
         };
 
     private static double ComputeMacroF1(int[,] confusion)
@@ -417,7 +426,8 @@ public sealed class TurnRoutingQualityBaselineTests
 
             var precision = tp / (double)Math.Max(1, tp + fp);
             var recall = tp / (double)Math.Max(1, tp + fn);
-            var f1 = Math.Abs(precision + recall) < double.Epsilon ? 0d : 2d * precision * recall / (precision + recall);
+            var denominator = precision + recall;
+            var f1 = Math.Abs(denominator) < 1e-12d ? 0d : 2d * precision * recall / denominator;
             f1Sum += f1;
         }
 
@@ -433,7 +443,7 @@ public sealed class TurnRoutingQualityBaselineTests
 
         var policy = new OnnxTurnRoutingPolicy(
             config,
-            new FixedEmbeddingGenerator([0.2f, 0.4f, 0.6f]),
+            new FixedEmbeddingGenerator(new float[PromptFeatureExtractor.EmbeddingSegmentDimensions]),
             classifier,
             NullLogger<OnnxTurnRoutingPolicy>.Instance);
 
@@ -533,7 +543,7 @@ public sealed class TurnRoutingQualityBaselineTests
         if (string.IsNullOrWhiteSpace(raw))
             return defaultValue;
 
-        return double.TryParse(raw, out var parsed) && parsed > 0d
+        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) && parsed > 0d
             ? parsed
             : defaultValue;
     }

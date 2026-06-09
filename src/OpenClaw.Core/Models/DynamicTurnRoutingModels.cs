@@ -61,6 +61,32 @@ public sealed class CacheContinuitySafeguardsConfig
     public bool ResetOnProfileSwitch { get; set; } = true;
 }
 
+public static class DynamicTurnRoutingTierTargets
+{
+    private static readonly CacheContinuitySafeguardsConfig DefaultSafeguards = new();
+    private static readonly DynamicTurnRoutingTierTarget DefaultTier = new();
+
+    public static bool HasAnyConfigured(DynamicTurnRoutingTierMap tiers)
+        => IsConfigured(tiers.T0)
+        || IsConfigured(tiers.T1)
+        || IsConfigured(tiers.T2)
+        || IsConfigured(tiers.T3);
+
+    public static bool IsConfigured(DynamicTurnRoutingTierTarget tier)
+        => !string.IsNullOrWhiteSpace(tier.ModelProfileId)
+        || !string.IsNullOrWhiteSpace(tier.DirectModelFallbackProfileId)
+        || tier.AllowedTools.Length > 0
+        || tier.PreferredTags.Length > 0
+        || !string.IsNullOrWhiteSpace(tier.ReasoningLevel)
+        || !string.IsNullOrWhiteSpace(tier.ResponsePolicy)
+        || !string.IsNullOrWhiteSpace(tier.ImageCapableModelProfileId)
+        || tier.CacheContinuitySafeguards.Enabled != DefaultSafeguards.Enabled
+        || tier.CacheContinuitySafeguards.MaxConversationTurns != DefaultSafeguards.MaxConversationTurns
+        || tier.CacheContinuitySafeguards.ResetOnProfileSwitch != DefaultSafeguards.ResetOnProfileSwitch
+        || !string.Equals(tier.PromptMode, DefaultTier.PromptMode, StringComparison.OrdinalIgnoreCase)
+        || tier.DisableTools;
+}
+
 public sealed class ResolvedDynamicTurnRoutingConfig
 {
     public bool Enabled { get; init; }

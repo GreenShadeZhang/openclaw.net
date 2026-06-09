@@ -13,9 +13,9 @@ internal sealed record RoutingFeatureInput(
 
 internal static partial class PromptFeatureExtractor
 {
-    private const int EmbeddingSegmentDims = 512;
+    internal const int EmbeddingSegmentDimensions = 512;
 
-    internal const int FeatureVectorDimensions = EmbeddingSegmentDims * 3;
+    internal const int FeatureVectorDimensions = EmbeddingSegmentDimensions * 3;
 
     private static readonly string[] DebugKeywords = ["error", "bug", "exception", "traceback", "failed", "root cause", "报错", "根因", "修复", "stack trace", "debug"];
     private static readonly string[] ResearchKeywords = ["调研", "research", "对比", "compare", "survey", "分析报告", "competitive analysis", "综述"];
@@ -42,13 +42,13 @@ internal static partial class PromptFeatureExtractor
         var features = new float[FeatureVectorDimensions];
 
         var offset = 0;
-        CopyEmbeddingSegment(currentEmbedding, features.AsSpan(offset, EmbeddingSegmentDims));
-        offset += EmbeddingSegmentDims;
+        CopyEmbeddingSegment(currentEmbedding, features.AsSpan(offset, EmbeddingSegmentDimensions), nameof(currentEmbedding));
+        offset += EmbeddingSegmentDimensions;
 
-        CopyEmbeddingSegment(historyEmbedding, features.AsSpan(offset, EmbeddingSegmentDims));
-        offset += EmbeddingSegmentDims;
+        CopyEmbeddingSegment(historyEmbedding, features.AsSpan(offset, EmbeddingSegmentDimensions), nameof(historyEmbedding));
+        offset += EmbeddingSegmentDimensions;
 
-        CopyEmbeddingSegment(assistantEmbedding, features.AsSpan(offset, EmbeddingSegmentDims));
+        CopyEmbeddingSegment(assistantEmbedding, features.AsSpan(offset, EmbeddingSegmentDimensions), nameof(assistantEmbedding));
         return features;
     }
 
@@ -68,8 +68,15 @@ internal static partial class PromptFeatureExtractor
         return new RoutingSignals(debug, repoArch, highRisk, longContext, strictFormat, hasCodeBlock, hasFileReference, hasUrl, deepConversation, research, planning);
     }
 
-    private static void CopyEmbeddingSegment(ReadOnlySpan<float> source, Span<float> destination)
+    private static void CopyEmbeddingSegment(ReadOnlySpan<float> source, Span<float> destination, string parameterName)
     {
+        if (source.Length != destination.Length)
+        {
+            throw new ArgumentException(
+                $"Expected embedding length {destination.Length}, but received {source.Length}.",
+                parameterName);
+        }
+
         source.CopyTo(destination);
     }
 

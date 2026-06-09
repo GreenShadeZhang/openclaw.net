@@ -589,13 +589,30 @@ public sealed class MafAgentRuntime : IAgentRuntime
         var baseOptions = CreateChatOptions(session, responseSchema);
         baseOptions.Tools = _toolExecutor.GetToolDeclarations(session);
 
-        var decision = await _turnRoutingPolicy.ResolveAsync(new TurnRoutingRequest
+        TurnRoutingDecision decision;
+        try
         {
-            Session = session,
-            Messages = BuildMessages(session),
-            UserMessage = userMessage,
-            BaseOptions = baseOptions
-        }, ct);
+            decision = await _turnRoutingPolicy.ResolveAsync(new TurnRoutingRequest
+            {
+                Session = session,
+                Messages = BuildMessages(session),
+                UserMessage = userMessage,
+                BaseOptions = baseOptions
+            }, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Turn routing policy failed; falling back to T2/default routing.");
+            decision = new TurnRoutingDecision
+            {
+                Tier = "T2",
+                Reason = "routing_policy_error"
+            };
+        }
 
         var snapshot = new TurnRoutingSnapshot(
             session.ModelProfileId,
@@ -635,6 +652,7 @@ public sealed class MafAgentRuntime : IAgentRuntime
         }
         else if (decision.AllowedTools.Length > 0)
         {
+            session.RouteToolsDisabled = false;
             session.RouteAllowedTools = decision.AllowedTools;
         }
         session.RouteModelTier = decision.Tier;
