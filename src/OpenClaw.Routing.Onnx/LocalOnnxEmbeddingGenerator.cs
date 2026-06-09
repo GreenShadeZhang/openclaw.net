@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -427,7 +428,7 @@ internal sealed class OnnxEmbeddingModelRunner : IEmbeddingModelRunner
         }
 
         // Second pass: fall back to mean-pooling over a rank-3 hidden-state tensor.
-        foreach (var result in results)
+        foreach (var result in results.Where(result => TryGetPooledEmbedding(result, attentionMask, out _)))
         {
             if (TryGetPooledEmbedding(result, attentionMask, out var pooledEmbedding))
                 return pooledEmbedding;
