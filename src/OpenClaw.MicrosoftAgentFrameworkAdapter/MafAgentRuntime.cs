@@ -452,6 +452,7 @@ public sealed class MafAgentRuntime : IAgentRuntime
                 SkillPromptLength = _skillPromptLength,
                 SessionTokenBudget = _sessionTokenBudget,
                 ToolInvocations = toolInvocations,
+                TurnTokenUsageObserver = _turnTokenUsageObserver,
                 RecordContractTurnUsage = _recordContractTurnUsage,
                 ApprovalCallback = approvalCallback,
                 StreamEventWriter = WriteStreamEventAsync
@@ -903,6 +904,7 @@ public sealed class MafAgentRuntime : IAgentRuntime
         LlmExecutionResult execution,
         TimeSpan elapsed)
     {
+        var isEstimated = execution.Response.Usage is null;
         var inputTokens = execution.Response.Usage?.InputTokenCount
             ?? LlmExecutionEstimateBuilder.EstimateInputTokens(messages);
         var outputTokens = execution.Response.Usage?.OutputTokenCount
@@ -919,16 +921,39 @@ public sealed class MafAgentRuntime : IAgentRuntime
         _metrics.AddPromptCacheWrites(cacheUsage.CacheWriteTokens);
         _providerUsage.AddTokens(execution.ProviderId, execution.ModelId, inputTokens, outputTokens);
         _providerUsage.AddCacheTokens(execution.ProviderId, execution.ModelId, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens);
+
+        var record = new TurnTokenUsageRecord
+        {
+            SessionId = session.Id,
+            ChannelId = session.ChannelId,
+            ProviderId = execution.ProviderId,
+            ModelId = execution.ModelId,
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            CacheReadTokens = cacheUsage.CacheReadTokens,
+            CacheWriteTokens = cacheUsage.CacheWriteTokens,
+            EstimatedInputTokensByComponent = isEstimated
+                ? LlmExecutionEstimateBuilder.BuildInputTokenEstimate(messages, inputTokens, 0)
+                : new InputTokenComponentEstimate(),
+            IsEstimated = isEstimated
+        };
+
+        if (_turnTokenUsageObserver is not null)
+        {
+            _turnTokenUsageObserver.RecordTurn(record);
+            return;
+        }
+
         _providerUsage.RecordTurn(
-            session.Id,
-            session.ChannelId,
-            execution.ProviderId,
-            execution.ModelId,
-            inputTokens,
-            outputTokens,
-            cacheUsage.CacheReadTokens,
-            cacheUsage.CacheWriteTokens,
-            LlmExecutionEstimateBuilder.BuildInputTokenEstimate(messages, inputTokens, 0));
+            record.SessionId,
+            record.ChannelId,
+            record.ProviderId,
+            record.ModelId,
+            record.InputTokens,
+            record.OutputTokens,
+            record.CacheReadTokens,
+            record.CacheWriteTokens,
+            record.EstimatedInputTokensByComponent);
     }
 
     private static string ExtractResponseText(AgentResponse response)

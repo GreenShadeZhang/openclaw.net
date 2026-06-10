@@ -217,6 +217,13 @@
                             <span class="sx-count-pill">@_providerTurns.Count</span>
                         </div>
 
+                        @if (!string.IsNullOrWhiteSpace(_timelineLoadError))
+                        {
+                            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                                @_timelineLoadError
+                            </MudAlert>
+                        }
+
                         @if (_providerTurns.Count == 0)
                         {
                             <MudText Typo="Typo.body2" Style="opacity:.6" Class="pa-4 text-center">
@@ -581,6 +588,8 @@
     private List<SessionInfo>? _sessions;
     private SessionDetail? _selectedDetail;
     private List<ProviderTurnView> _providerTurns = [];
+    private string? _currentDetailSessionId;
+    private string? _timelineLoadError;
     private string _search = string.Empty;
     private string _channelFilter = string.Empty;
     private string _senderFilter = string.Empty;
@@ -722,14 +731,18 @@
 
     private async Task SelectSession(SessionInfo session)
     {
+        var selectedSessionId = session.SessionId;
+        _currentDetailSessionId = selectedSessionId;
         _loadingDetail = true;
         _selectedDetail = null;
         _providerTurns = [];
+        _timelineLoadError = null;
         StateHasChanged();
 
         try
         {
-            using var resp = await Api.GetRawAsync($"/admin/sessions/{session.SessionId}");
+            using var resp = await Api.GetRawAsync($"/admin/sessions/{selectedSessionId}");
+            SessionDetail? resolvedDetail;
             if (resp.IsSuccessStatusCode)
             {
                 using var stream = await resp.Content.ReadAsStreamAsync();
@@ -742,14 +755,14 @@
                     && root.TryGetProperty("session", out var sessionEl)
                     && sessionEl.ValueKind == System.Text.Json.JsonValueKind.Object)
                 {
-                    _selectedDetail = BuildSessionDetailFromAdmin(session, root, sessionEl);
+                    resolvedDetail = BuildSessionDetailFromAdmin(session, root, sessionEl);
                 }
                 else
                 {
                     // Fallback: try direct deserialization for backends still returning the legacy shape.
                     var legacy = System.Text.Json.JsonSerializer.Deserialize<SessionDetail>(
                         root.GetRawText(), Api.JsonOptions);
-                    _selectedDetail = legacy ?? new SessionDetail(
+                    resolvedDetail = legacy ?? new SessionDetail(
                         session.SessionId, session.ChannelId, session.SenderId,
                         session.LastActive,
                         session.TotalInputTokens,
@@ -762,7 +775,7 @@
             }
             else
             {
-                _selectedDetail = new SessionDetail(
+                resolvedDetail = new SessionDetail(
                     session.SessionId, session.ChannelId, session.SenderId,
                     session.LastActive,
                     session.TotalInputTokens,
@@ -773,6 +786,13 @@
                     new List<SessionMessage>());
             }
 
+            if (!string.Equals(_currentDetailSessionId, selectedSessionId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _selectedDetail = resolvedDetail;
+
             if (_selectedDetail is not null)
             {
                 await LoadSessionTimeline(_selectedDetail.SessionId);
@@ -780,6 +800,9 @@
         }
         catch
         {
+            if (!string.Equals(_currentDetailSessionId, selectedSessionId, StringComparison.Ordinal))
+                return;
+
             _selectedDetail = new SessionDetail(
                 session.SessionId, session.ChannelId, session.SenderId,
                 session.LastActive,
@@ -792,8 +815,11 @@
         }
         finally
         {
-            _loadingDetail = false;
-            StateHasChanged();
+            if (string.Equals(_currentDetailSessionId, selectedSessionId, StringComparison.Ordinal))
+            {
+                _loadingDetail = false;
+                StateHasChanged();
+            }
         }
     }
 
@@ -1151,13 +1177,23 @@
 
     private async Task LoadSessionTimeline(string sessionId)
     {
+        if (!string.Equals(_currentDetailSessionId, sessionId, StringComparison.Ordinal))
+            return;
+
         _providerTurns = [];
+        _timelineLoadError = null;
 
         try
         {
             using var resp = await Api.GetRawAsync($"/admin/sessions/{sessionId}/timeline?limit=50");
             if (!resp.IsSuccessStatusCode)
             {
+                if (string.Equals(_currentDetailSessionId, sessionId, StringComparison.Ordinal))
+                {
+                    _timelineLoadError = $"{L["common.error"]}: {resp.StatusCode}";
+                    _providerTurns = [];
+                    StateHasChanged();
+                }
                 return;
             }
 
@@ -1165,10 +1201,22 @@
             using var doc = await System.Text.Json.JsonDocument.ParseAsync(stream);
             var root = doc.RootElement;
 
+            if (root.TryGetProperty("sessionId", out var timelineSessionId)
+                && timelineSessionId.ValueKind == System.Text.Json.JsonValueKind.String
+                && !string.Equals(timelineSessionId.GetString(), sessionId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             if (root.ValueKind != System.Text.Json.JsonValueKind.Object
                 || !root.TryGetProperty("providerTurns", out var providerTurns)
                 || providerTurns.ValueKind != System.Text.Json.JsonValueKind.Array)
             {
+                if (string.Equals(_currentDetailSessionId, sessionId, StringComparison.Ordinal))
+                {
+                    _providerTurns = [];
+                    StateHasChanged();
+                }
                 return;
             }
 
@@ -1188,11 +1236,21 @@
                     ReadJsonInt64(turn, "cacheWriteTokens")));
             }
 
-            _providerTurns = parsed;
+            if (string.Equals(_currentDetailSessionId, sessionId, StringComparison.Ordinal))
+            {
+                _providerTurns = parsed;
+                _timelineLoadError = null;
+                StateHasChanged();
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            _providerTurns = [];
+            if (string.Equals(_currentDetailSessionId, sessionId, StringComparison.Ordinal))
+            {
+                _timelineLoadError = ex.Message;
+                _providerTurns = [];
+                StateHasChanged();
+            }
         }
     }
 

@@ -126,7 +126,8 @@ internal static class CoreServicesExtensions
             new CompositeTurnTokenUsageObserver([
                 new ProviderUsageTurnTokenUsageObserver(sp.GetRequiredService<ProviderUsageTracker>()),
                 sp.GetRequiredService<TurnTokenUsageAuditLog>()
-            ]));
+            ],
+            sp.GetRequiredService<ILogger<CompositeTurnTokenUsageObserver>>()));
         services.AddSingleton<ToolUsageTracker>();
         services.AddSingleton<ProviderSmokeRegistry>();
         services.AddSingleton<StartupNoticeCollector>();

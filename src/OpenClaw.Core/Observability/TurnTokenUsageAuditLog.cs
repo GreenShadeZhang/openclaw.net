@@ -60,16 +60,33 @@ public sealed class TurnTokenUsageAuditLog : ITurnTokenUsageObserver
 public sealed class CompositeTurnTokenUsageObserver : ITurnTokenUsageObserver
 {
     private readonly IReadOnlyList<ITurnTokenUsageObserver> _observers;
+    private readonly ILogger<CompositeTurnTokenUsageObserver>? _logger;
 
-    public CompositeTurnTokenUsageObserver(IReadOnlyList<ITurnTokenUsageObserver> observers)
+    public CompositeTurnTokenUsageObserver(
+        IReadOnlyList<ITurnTokenUsageObserver> observers,
+        ILogger<CompositeTurnTokenUsageObserver>? logger = null)
     {
         _observers = observers;
+        _logger = logger;
     }
 
     public void RecordTurn(TurnTokenUsageRecord record)
     {
         foreach (var observer in _observers)
-            observer.RecordTurn(record);
+        {
+            try
+            {
+                observer.RecordTurn(record);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(
+                    ex,
+                    "Turn token usage observer {ObserverType} failed while recording session {SessionId}",
+                    observer.GetType().FullName,
+                    record.SessionId);
+            }
+        }
     }
 }
 
