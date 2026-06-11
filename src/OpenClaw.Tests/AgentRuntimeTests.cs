@@ -375,6 +375,21 @@ public class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task RunAsync_DoesNotTreatRouteExecutionInvalidOperationAsProviderOutage()
+    {
+        _chatClient.GetResponseAsync(
+            Arg.Any<IList<ChatMessage>>(),
+            Arg.Any<ChatOptions>(),
+            Arg.Any<CancellationToken>())
+            .Returns<Task<ChatResponse>>(_ => throw new InvalidOperationException("route execution failed before dispatch"));
+
+        var session = new Session { Id = "sess1", SenderId = "user1", ChannelId = "test-channel" };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _agent.RunAsync(session, "Hello", CancellationToken.None));
+        Assert.Contains("route execution failed", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task RunAsync_PersistsCheckpointAfterToolBatch()
     {
         var chatClient = Substitute.For<IChatClient>();

@@ -1528,8 +1528,7 @@ public sealed class AgentRuntime : IAgentRuntime
             || message.Contains("credential", StringComparison.OrdinalIgnoreCase)
             || message.Contains("API key", StringComparison.OrdinalIgnoreCase)
             || message.Contains("endpoint", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("token budget", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("route execution failed", StringComparison.OrdinalIgnoreCase);
+            || message.Contains("token budget", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
